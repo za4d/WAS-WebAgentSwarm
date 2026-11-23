@@ -2,7 +2,7 @@ name: WAS CR-01 — content/background physical Send offline
 
 on:
   push:
-    branches: [fix/cr01-content-background-20261123, fix/cr01-durable-receipts-20261123, fix/cr01-audit-boundaries-20261123, fix/cr01-codeql-token-atomic-20261123, fix/cr01-r01-r05-relay-authority-20261123]
+    branches: [fix/cr01-content-background-20261123, fix/cr01-durable-receipts-20261123, fix/cr01-audit-boundaries-20261123, fix/cr01-codeql-token-atomic-20261123, fix/cr01-r01-r05-relay-authority-20261123, fix/cr01-sr2-di01-rb02-20261123]
     paths:
       - 'browser-extension/**'
       - 'tests/relay-evaluation/**'
@@ -10,6 +10,8 @@ on:
       - 'tests/test_bridge.py'
       - 'tests/test_cr04_effectful_retry.py'
       - 'src/web_agent_swarm/swarm.py'
+      - 'src/web_agent_swarm/state.py'
+      - 'tests/test_state.py'
       - 'bridge/**'
       - '.github/workflows/was-cr01.yml'
   workflow_dispatch:
