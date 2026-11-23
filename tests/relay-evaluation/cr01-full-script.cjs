@@ -160,11 +160,13 @@ function backgroundFixture({
       onChanged:callbackRegistry(),
       local:{
         async get(keys) {
-          if(rejectRead && (keys||[]).includes('wasCommandResultsV1')) {
+          if(rejectRead && (keys===null || (keys||[]).includes('wasCommandResultsV1'))) {
             throw Error('Synthetic persisted receipt read denied');
           }
           const output={bridgeToken:'x'.repeat(32)};
-          for(const k of keys || [])if(Object.prototype.hasOwnProperty.call(persisted,k))output[k]=persisted[k];
+          for(const k of (keys===null ? Object.keys(persisted) : keys||[])){
+            if(Object.prototype.hasOwnProperty.call(persisted,k))output[k]=persisted[k];
+          }
           return output;
         },
         async set(updates){
@@ -338,7 +340,7 @@ async function run(){
     assert.equal(result.mayHaveExecuted,true);
     assert.equal(f.state.sent,1);
     assert.equal(f.state.injected,0);
-    assert.ok(Array.isArray(persisted.wasCommandResultsV1));
+    assert.ok(Object.keys(persisted).some(k=>k.startsWith('wasCommandReceiptV2:')));
   });
   await testcase('B02 durable unknown survives service-worker restart and replay',async()=>{
     const persisted={};
@@ -359,7 +361,8 @@ async function run(){
     void first.dispatch(sock1,'r1'); // intentionally do not await unresolved effect
     await flush(150);
     assert.equal(first.state.sent,1);
-    assert.ok(persisted.wasCommandResultsV1.some(e=>e.result.phase==='attempting'));
+    assert.ok(Object.entries(persisted).some(([k,v])=>
+      k.startsWith('wasCommandReceiptV2:') && v.result.phase==='attempting'));
     const resumed=backgroundFixture({persisted});
     const sock2=await resumed.ready();
     const status=await resumed.status(sock2,'st1','cr01_bg_cmd_1');
