@@ -1,0 +1,85 @@
+{
+  "test_family": "WAS-SEND",
+  "run_id": "WAS-FORK-BASELINE-20261123-SOURCE",
+  "observation_date_utc": "2026-11-23",
+  "target": {
+    "repository": "za4d/WAS-WebAgentSwarm",
+    "branch": "main",
+    "commit": "cf8341204ae59c9bf3a3487f06d2c672ce39334f",
+    "blobs": {
+      "browser-extension/content.js": "f2968d5f803d7567c3de790254f6a5629f3b5bb1",
+      "browser-extension/background.js": "78209793d0d816ead221a13b0ad57b3f82028cff"
+    }
+  },
+  "method": "GitHub native connector returned pinned original source. Source code listener and callContent directly evaluated with synthetic DOM and Chrome test globals in isolated JavaScript functions. No original browser accessed.",
+  "provenance": "SIMULATED-SOURCE-EXECUTION",
+  "product_verdict_summary": {
+    "passed": 1,
+    "failed": 4
+  },
+  "cases": [
+    {
+      "id": "SEND-01",
+      "oracle": "expected target empty composer -> exactly one send click",
+      "observed": {
+        "reply": {
+          "ok": true
+        },
+        "simulated_clicks": 1,
+        "composer_contains": "WAS-BASELINE-TEST"
+      },
+      "product": "PASS"
+    },
+    {
+      "id": "SEND-02",
+      "oracle": "mismatched expectedUrl must be held without click/owner draft mutation",
+      "observed": {
+        "reply": {
+          "ok": true
+        },
+        "simulated_clicks": 1,
+        "owner_draft_overwritten": true
+      },
+      "product": "FAIL"
+    },
+    {
+      "id": "SEND-03",
+      "oracle": "nonempty owner draft on intended tab must remain unchanged and block send",
+      "observed": {
+        "reply": {
+          "ok": true
+        },
+        "simulated_clicks": 1,
+        "owner_draft_overwritten": true
+      },
+      "product": "FAIL"
+    },
+    {
+      "id": "SEND-04",
+      "oracle": "URL changed on input must block click",
+      "observed": {
+        "reply": {
+          "ok": true
+        },
+        "simulated_clicks": 1
+      },
+      "product": "FAIL"
+    },
+    {
+      "id": "SEND-05",
+      "oracle": "ambiguous rejection after potential click must not redispatch effectful command",
+      "observed": {
+        "effectful_content_message_calls": 2,
+        "reinject_count": 1,
+        "final_reply": {
+          "ok": true
+        }
+      },
+      "product": "FAIL"
+    }
+  ],
+  "limitation": "Simulated dispatch count is not an observed number of actual ChatGPT browser clicks; no Windows session or provider permissions tested.",
+  "new_regression_file": "tests/relay-evaluation/send-safety.cjs",
+  "regression_file_run_status": "SYNTAX_PARSED_ONLY_NOT_STANDALONE_EXECUTED",
+  "next": "Run Node file on isolated checkout. Expected 1/5 product pass and process exit code 1. Repair on separate fix branch before live send."
+}

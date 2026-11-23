@@ -1,0 +1,99 @@
+{
+  "run_id": "WAS-DEEP-20261123-SOURCE-01",
+  "observed_date_utc": "2026-11-23",
+  "original_observation": "Source functions fetched through connected native GitHub API and directly executed in isolated JavaScript VM-like function harness; NOT a completed run of the archived command-line script.",
+  "product_revision": {
+    "repository": "MrWrecks/WAS-WebAgentSwarm",
+    "commit": "7f96d4288cbfbed4188ae0f13d8334dd81b7833a",
+    "branch": "fix/extension-connection-scope",
+    "files": [
+      {
+        "path": "browser-extension/content.js",
+        "git_blob_sha1": "fb147adc00da0694b1fc71da6e59e3c52b7ca040"
+      },
+      {
+        "path": "browser-extension/background.js",
+        "git_blob_sha1": "e209cba8c033cbef2bb17ef0a0af0e622ae35ee5"
+      }
+    ]
+  },
+  "environment": {
+    "mode": "SIMULATED",
+    "runtime": "connected native tool isolated JavaScript V8 execution",
+    "real_chrome_access": false,
+    "real_chatgpt_access": false,
+    "real_github_write_by_test": false,
+    "real_send_clicks_observed": 0
+  },
+  "tests": [
+    {
+      "case": "S01",
+      "goal": "matching conversation URL with empty composer",
+      "observed": {
+        "reply_ok": true,
+        "effect_clicks_synthetic": 1,
+        "final_draft": "WAS-DEEP-TEST-PAYLOAD"
+      },
+      "harness": "PASS",
+      "product": "PASS_SIMULATED"
+    },
+    {
+      "case": "S02",
+      "goal": "wrong conversation URL",
+      "observed": {
+        "reply_ok": false,
+        "terminal": true,
+        "may_have_executed": false,
+        "effect_clicks_synthetic": 0,
+        "draft_preserved": true
+      },
+      "harness": "PASS",
+      "product": "PASS_SIMULATED"
+    },
+    {
+      "case": "S03",
+      "goal": "navigation while composing",
+      "observed": {
+        "reply_ok": false,
+        "terminal": true,
+        "may_have_executed": false,
+        "effect_clicks_synthetic": 0,
+        "changes": 1,
+        "unsent_composer_text_may_remain": true
+      },
+      "harness": "PASS",
+      "product": "PASS_SIMULATED"
+    },
+    {
+      "case": "S04",
+      "goal": "existing owner draft must remain untouched",
+      "observed": {
+        "reply_ok": true,
+        "effect_clicks_synthetic": 1,
+        "original_draft": "OWNER DRAFT",
+        "final_draft": "WAS-DEEP-TEST-PAYLOAD",
+        "changes": 1
+      },
+      "harness": "PASS_DEFECT_REPRODUCED",
+      "product": "FAIL"
+    },
+    {
+      "case": "S05",
+      "goal": "no effectful repeat after lost content-script reply",
+      "observed": {
+        "effectful_content_script_invocations": 2,
+        "content_script_reinjection_count": 1,
+        "final_reply_ok": true
+      },
+      "harness": "PASS_DEFECT_REPRODUCED",
+      "product": "FAIL"
+    }
+  ],
+  "adjudication": "The actual pinned source's callContent path can invoke an effectful content-script message twice when the first may have clicked and its response is lost. The original sendMessage path can replace an owner's pre-existing draft and click Send. These are deterministic simulated defects, not witnessed duplicate production clicks.",
+  "additional_suite_run": false,
+  "windows_owner_test_run": false,
+  "live_send_authorized_or_attempted": false,
+  "disposition": "BLOCK LIVE CONSEQUENTIAL SEND until fixes, real integration fault tests, R8 acceptance and account/provider authorisation.",
+  "reproducer": "docs/feasibility/evidence/was-deep-20261123/source-function-regression.cjs",
+  "reproducibility_note": "The checked-in CLI reproducer was reconstructed from the exact tested function shapes, compiled for syntax only in the connector environment; its end-to-end command-line execution is NOT RUN and must be recorded separately when executed."
+}
