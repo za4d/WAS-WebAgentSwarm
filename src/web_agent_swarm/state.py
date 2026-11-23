@@ -395,6 +395,19 @@ class DurableStore:
             ledger = data["send_transactions"]
             previous = ledger.get(clean)
             previous = previous if isinstance(previous, dict) else {}
+            # R05 immutable link: the diagnostic state cannot silently
+            # reassign a previously journal-linked command to another permit.
+            proposed = {
+                "relay_attempt_id": str(relay_attempt_id or ""),
+                "relay_recipient": str(relay_recipient or ""),
+                "relay_generation": int(relay_generation or 0),
+                "body_sha256": str(body_sha256 or ""),
+                "expected_url": str(expected_url or ""),
+            }
+            for field, offered in proposed.items():
+                old = previous.get(field)
+                if old not in (None, "", 0) and offered not in (None, "", 0) and old != offered:
+                    raise ValueError("immutable R8 Send diagnostic correlation mismatch: " + field)
             now = time.time()
             record = {
                 "command_id": clean,
@@ -403,7 +416,7 @@ class DurableStore:
                 "status": clean_status,
                 "created_at": float(previous.get("created_at") or now),
                 "updated_at": now,
-                "may_have_executed": bool(may_have_executed),
+                "may_have_executed": bool(may_have_executed or previous.get("may_have_executed")),
                 # Diagnostic correlation only; never an independent R8 permit.
                 "relay_attempt_id": str(relay_attempt_id or previous.get("relay_attempt_id") or ""),
                 "relay_recipient": str(relay_recipient or previous.get("relay_recipient") or ""),
@@ -418,8 +431,20 @@ class DurableStore:
                     ledger.items(),
                     key=lambda item: float((item[1] or {}).get("updated_at") or 0.0),
                 )
-                for key, _ in ordered[:-512]:
+                # Best-effort 512-item limit for disposable, purely
+                # pre-effect standalone diagnostics only. Never silently
+                # evict a Relay-linked or possibly-effectful Send receipt:
+                # those are incident evidence and lack proof of reconciliation.
+                overflow = len(ledger) - 512
+                for key, value in ordered:
+                    if overflow <= 0:
+                        break
+                    if (isinstance(value, dict)
+                            and (value.get("relay_attempt_id")
+                                 or value.get("may_have_executed"))):
+                        continue
                     ledger.pop(key, None)
+                    overflow -= 1
             self.save(data)
             return copy.deepcopy(record)
 
