@@ -199,6 +199,7 @@ function backgroundFixture({
     close(){this.readyState=3;if(this.onclose)this.onclose();}
   }
   const sandbox={chrome,WebSocket:FakeSocket,URL,console,
+    crypto:crypto.webcrypto,TextEncoder,
     setInterval:()=>1,clearInterval:()=>{},setTimeout:()=>1,clearTimeout:()=>{},
     globalThis:null};
   sandbox.globalThis=sandbox;
