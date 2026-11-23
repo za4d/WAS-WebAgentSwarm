@@ -195,9 +195,9 @@ function backgroundFixture({
     await flush();
     return sockets[0];
   };
-  const dispatch = async (socket,id, commandId='cr01_bg_cmd_1', text=TEXT) => {
+  const dispatch = async (socket,id, commandId='cr01_bg_cmd_1', text=TEXT, expectedUrl=GOOD) => {
     await socket.onmessage({data:JSON.stringify({
-      type:'send',id,tabId:73,text,commandId
+      type:'send',id,tabId:73,text,commandId,expectedUrl
     })});
     await flush();
     return messages.filter(m=>m.type==='send-result' && m.id===id).at(-1);
@@ -357,17 +357,13 @@ async function run(){
     assert.equal(b.duplicate,true);
     assert.equal(f.state.sent,1);
   });
-  await testcase('B06 wrong target after tab resolution fails before content send',async()=>{
+  await testcase('B06 target changed since runtime pin: zero content dispatches',async()=>{
     const f=backgroundFixture({tabUrl:WRONG});
     const sock=await f.ready();
-    // Even a syntactically valid command must not be sent to an absent pin;
-    // content itself guards the exact URL delivered by the background.
-    // Here the wrong URL is synthetic but syntactically valid: content absent
-    // would be unsafe to credit. Confirm that the pin is forwarded verbatim.
-    let observedPin=null;
-    f.state.handler=msg=>{observedPin=msg.expectedUrl;return {ok:false,mayHaveExecuted:false};};
-    await f.dispatch(sock,'r1');
-    assert.equal(observedPin,WRONG);
+    const result=await f.dispatch(sock,'r1');
+    assert.equal(result.ok,false);
+    assert.equal(result.mayHaveExecuted,false);
+    assert.equal(f.state.sent,0);
   });
   await testcase('B07 real content handler and background compose one click',async()=>{
     const f=contentFixture();
@@ -414,6 +410,20 @@ async function run(){
     assert.equal(fn(),null);
     clients.delete([...clients][0]);
     assert.ok(fn());
+  });
+  await testcase('B10 missing expected URL is rejected at background boundary',async()=>{
+    const f=backgroundFixture();
+    const sock=await f.ready();
+    const result=await f.dispatch(sock,'r1','cr01_bg_cmd_1',TEXT,'');
+    assert.equal(result.ok,false);
+    assert.equal(result.mayHaveExecuted,false);
+    assert.equal(f.state.sent,0);
+  });
+  await testcase('C13 explicitly pinned homepage can bootstrap with empty draft',async()=>{
+    const f=contentFixture({url:'https://chatgpt.com/'});
+    const result=await f.call(f.handler,'cr01_home_boot','https://chatgpt.com/');
+    assert.equal(result.ok,true);
+    assert.equal(f.state.clicks,1);
   });
   const pass=cases.filter(c=>c.verdict==='PASS').length;
   console.log(JSON.stringify({
