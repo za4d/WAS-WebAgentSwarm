@@ -1,0 +1,51 @@
+name: CR-01 RB-01 actual Node trusted identity on Windows
+
+on:
+  push:
+    branches:
+      - test/cr01-sr3-windows-trusted-bridge-20261123
+    paths:
+      - 'tests/relay-evaluation/cr01-rb01-real-bridge-identity.ps1'
+      - 'tests/relay-evaluation/cr01-rb01-live-bridge-worker-probe.ps1'
+      - 'tests/relay-evaluation/cr01-rb01-trusted-bridge-launch.ps1'
+      - '.github/workflows/cr01-rb01-real-bridge.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  real-process-boundary:
+    name: Strict Node bridge / two Windows standard-user SIDs (synthetic)
+    runs-on: windows-latest
+    timeout-minutes: 9
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install exact public bridge dependencies with no lifecycle scripts
+        run: npm ci --prefix bridge --ignore-scripts
+      - name: Execute controlled trusted account and untrusted coding worker probe
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $evidence=Join-Path $env:RUNNER_TEMP 'rb01-real-bridge.json'
+          & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File 'tests/relay-evaluation/cr01-rb01-real-bridge-identity.ps1' -EvidencePath $evidence
+          $status=$LASTEXITCODE
+          if(Test-Path $evidence){Get-Content -LiteralPath $evidence}
+          ('source_sha='+$env:GITHUB_SHA) | Set-Content -LiteralPath (Join-Path $env:RUNNER_TEMP 'rb01-real-bridge-receipt.txt')
+          ('runner_exit='+$status) | Add-Content -LiteralPath (Join-Path $env:RUNNER_TEMP 'rb01-real-bridge-receipt.txt')
+          exit $status
+      - name: Save original process/identity safety observations
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rb01-actual-node-bridge-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/rb01-real-bridge.json
+            ${{ runner.temp }}/rb01-real-bridge-receipt.txt
+          if-no-files-found: warn
+          retention-days: 30
