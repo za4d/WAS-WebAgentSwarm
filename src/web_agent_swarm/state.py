@@ -408,6 +408,26 @@ class DurableStore:
                 old = previous.get(field)
                 if old not in (None, "", 0) and offered not in (None, "", 0) and old != offered:
                     raise ValueError("immutable R8 Send diagnostic correlation mismatch: " + field)
+            # Reviewer S DI-01: a terminal or possibly-effectful R8 receipt is
+            # evidence, never a mutable reassignment target. A later separate
+            # observation must not rewrite an uncertain original diagnostic.
+            protected = bool(previous.get("relay_attempt_id") or
+                             previous.get("may_have_executed"))
+            if protected and previous:
+                for field, offered in (
+                    ("name", str(name or "")),
+                    ("tab_id", int(tab_id or 0)),
+                ):
+                    old = previous.get(field)
+                    if old not in (None, "", 0) and offered not in ("", 0) and old != offered:
+                        raise ValueError("immutable R8 Send diagnostic target mismatch: " + field)
+                old_status = str(previous.get("status") or "")
+                if old_status and old_status != "attempting" and clean_status != old_status:
+                    raise ValueError("regressive terminal R8 Send diagnostic status")
+                old_result = previous.get("result")
+                if (old_result is not None and isinstance(result, dict)
+                        and result != old_result):
+                    raise ValueError("immutable terminal R8 Send diagnostic result")
             now = time.time()
             record = {
                 "command_id": clean,
