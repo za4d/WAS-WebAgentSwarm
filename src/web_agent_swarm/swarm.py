@@ -1143,15 +1143,10 @@ class SwarmRuntime:
             tab for tab in self._tabs()
             if conversation_id(str(tab.get("url") or "")) == cid
         ]
-        if not matches:
+        # Multiple open tabs for one registered conversation are ambiguous:
+        # selecting the active one is not an authorization to pick a target.
+        if len(matches) != 1:
             return None
-        matches.sort(
-            key=lambda tab: (
-                not bool(tab.get("active")),
-                int(tab.get("windowId", 0)),
-                int(tab.get("index", 0)),
-            )
-        )
         return matches[0]
 
     def _bind(self, name: str, tab: Dict[str, object], kind: str, role: str = "") -> None:
