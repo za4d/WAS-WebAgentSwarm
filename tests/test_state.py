@@ -606,6 +606,38 @@ class DurableStoreTest(unittest.TestCase):
             self.assertEqual(result["status"], "conflict")
             self.assertIn("conflicting pending writes", result["error"])
             self.assertNotIn("shared", store.status())
+    def test_relay_attempt_receipt_is_immutable_and_survives_diagnostic_limit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = DurableStore(Path(tmp))
+            aid = "f" * 32
+            cid = "r8_" + aid
+            kwargs = {
+                "relay_attempt_id": aid, "relay_recipient": "R",
+                "relay_generation": 1,
+                "body_sha256": "a" * 64,
+                "expected_url": "https://chatgpt.com/c/rrrr3333",
+            }
+            first = store.send_transaction_record(
+                cid, name="reviewer", tab_id=73, status="attempting", **kwargs)
+            self.assertEqual(first["relay_attempt_id"], aid)
+            final = store.send_transaction_record(
+                cid, status="unknown", may_have_executed=True)
+            self.assertEqual(final["relay_attempt_id"], aid)
+            self.assertTrue(final["may_have_executed"])
+            with self.assertRaisesRegex(ValueError, "immutable R8"):
+                store.send_transaction_record(
+                    cid, status="ok", relay_attempt_id="e" * 32)
+            self.assertEqual(store.send_transaction_get(cid)["status"], "unknown")
+            for n in range(520):
+                store.send_transaction_record(
+                    "standalone-" + str(n), status="failed")
+            reloaded = DurableStore(Path(tmp))
+            record = reloaded.send_transaction_get(cid)
+            self.assertIsNotNone(record)
+            self.assertEqual(record["relay_recipient"], "R")
+            self.assertTrue(record["may_have_executed"])
+            self.assertEqual(record["body_sha256"], "a" * 64)
+
     def test_state_schema_migration_corruption_recovery_and_send_ledger(self):
         import json
         with tempfile.TemporaryDirectory() as tmp:
