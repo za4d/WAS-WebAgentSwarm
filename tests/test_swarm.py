@@ -870,6 +870,29 @@ class SwarmRuntimeTest(unittest.TestCase):
                 {"tester", "reviewer"},
             )
 
+    def test_duplicate_tabs_for_same_recipient_block_send(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            bridge = FakeBridge()
+            store = DurableStore(Path(tmp))
+            swarm = SwarmRuntime(bridge=bridge, store=store)
+            url = "https://chatgpt.com/c/duplicate-conversation"
+            bridge.tabs_data = [
+                {"id": 70, "windowId": 1, "index": 0,
+                 "title": "First", "url": url, "active": True},
+                {"id": 71, "windowId": 1, "index": 1,
+                 "title": "Second", "url": url, "active": False},
+            ]
+            store.bind("reviewer", {
+                "kind": "worker", "role": "reviewer",
+                "conversation_id": "duplicate-conversation",
+                "url_at_bind": url,
+            })
+            self.assertIsNone(swarm._resolve("reviewer"))
+            result = swarm.send("reviewer", "Synthetic bounded task")
+            self.assertFalse(result["ok"])
+            self.assertEqual(bridge.sent, [])
+            self.assertEqual(store.send_transactions(), [])
+
     def test_send_persists_command_transaction(self):
         with tempfile.TemporaryDirectory() as tmp:
             bridge = FakeBridge()
