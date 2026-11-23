@@ -143,6 +143,7 @@ async function main(){
     }
   });
   await check('T07 two connected extensions cause fail-closed routing',async()=>{
+    const previouslyReceived=received.length;
     const other=[];const second=await extension(other);clients.push(second);
     await sleep(50);
     const health=await request('/health');
@@ -151,7 +152,7 @@ async function main(){
       tabId:73,text:'fixture',commandId:'cr01_remote_4',expectedUrl:PIN
     });
     assert.equal(r.status,409);
-    assert.equal(received.length,1);assert.equal(other.length,0);
+    assert.equal(received.length,previouslyReceived);assert.equal(other.length,0);
   });
  }finally{
   for(const c of clients){try{c.terminate();}catch{}}
