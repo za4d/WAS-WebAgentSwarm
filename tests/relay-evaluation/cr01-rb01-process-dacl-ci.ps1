@@ -23,7 +23,7 @@ public static class RB01ProcessDacl {
 # Give process access to trusted user + SYSTEM + Administrators only.
 # Do not grant BUILTIN\\Users, Authenticated Users or Everyone.
 $sddl='D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;'+$TrustedSid+')'
-$descriptor=New-Object System.Security.AccessControl.RawSecurityDescriptor($sddl)
+$descriptor=[System.Security.AccessControl.RawSecurityDescriptor]::new($sddl)
 $buf=New-Object byte[] $descriptor.BinaryLength
 $descriptor.GetBinaryForm($buf,0)
 $WRITE_DAC=[uint32]0x00040000
