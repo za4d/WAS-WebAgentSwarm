@@ -38,15 +38,25 @@ function loadBridgeToken() {
   const configured = String(process.env.WEB_SWARM_BRIDGE_TOKEN || '').trim();
   if (configured) return configured;
   fs.mkdirSync(path.dirname(TOKEN_FILE), { recursive: true });
-  if (fs.existsSync(TOKEN_FILE)) {
+
+  // Do not check existsSync and then blindly write: another bridge process
+  // could create its durable authentication token between those operations.
+  // The wx flag atomically creates a new token file or returns EEXIST.
+  const generated = crypto.randomBytes(32).toString('hex');
+  try {
+    fs.writeFileSync(TOKEN_FILE, `${generated}\n`, {
+      encoding: 'utf8', mode: 0o600, flag: 'wx'
+    });
+  } catch (error) {
+    if (error?.code !== 'EEXIST') throw error;
     const existing = fs.readFileSync(TOKEN_FILE, 'utf8').trim();
     if (existing.length < 32) {
+      // A concurrent creator may still be writing, or the prior file is
+      // damaged. Fail closed rather than rotating someone else's token.
       throw new Error(`Bridge token file is unexpectedly short: ${TOKEN_FILE}`);
     }
     return existing;
   }
-  const generated = crypto.randomBytes(32).toString('hex');
-  fs.writeFileSync(TOKEN_FILE, `${generated}\n`, { encoding: 'utf8', mode: 0o600 });
   try { fs.chmodSync(TOKEN_FILE, 0o600); } catch {}
   console.error(`Generated Web Agent Swarm bridge token at ${TOKEN_FILE}`);
   return generated;
