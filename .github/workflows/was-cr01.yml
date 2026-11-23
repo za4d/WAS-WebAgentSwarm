@@ -1,0 +1,92 @@
+name: WAS CR-01 — content/background physical Send offline
+
+on:
+  push:
+    branches: [fix/cr01-content-background-20261123]
+    paths:
+      - 'browser-extension/**'
+      - 'tests/relay-evaluation/**'
+      - 'src/web_agent_swarm/swarm.py'
+      - 'bridge/**'
+      - '.github/workflows/was-cr01.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  original-five-source-cases:
+    name: Original CR-01 five-case oracle (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Run exact checkout original five negative cases
+        shell: bash
+        run: |
+          set +e
+          node tests/relay-evaluation/send-safety.cjs > "$RUNNER_TEMP/cr01-original-five.json" 2> "$RUNNER_TEMP/cr01-original-five.stderr"
+          code=$?
+          set -e
+          cat "$RUNNER_TEMP/cr01-original-five.json"
+          cat "$RUNNER_TEMP/cr01-original-five.stderr" >&2
+          printf 'source_sha=%s\nnode_exit=%s\n' "$GITHUB_SHA" "$code" > "$RUNNER_TEMP/cr01-original-five-receipt.txt"
+          cat "$RUNNER_TEMP/cr01-original-five-receipt.txt"
+          exit "$code"
+      - name: Preserve original source-level receipts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cr01-original-five-${{ matrix.os }}-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/cr01-original-five.json
+            ${{ runner.temp }}/cr01-original-five.stderr
+            ${{ runner.temp }}/cr01-original-five-receipt.txt
+          retention-days: 30
+
+  full-extension-source:
+    name: Whole-script VM synthetic Chrome and restart (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Run whole content and background script fault suite
+        shell: bash
+        run: |
+          set +e
+          node tests/relay-evaluation/cr01-full-script.cjs > "$RUNNER_TEMP/cr01-full.json" 2> "$RUNNER_TEMP/cr01-full.stderr"
+          code=$?
+          set -e
+          cat "$RUNNER_TEMP/cr01-full.json"
+          cat "$RUNNER_TEMP/cr01-full.stderr" >&2
+          printf 'source_sha=%s\nnode_exit=%s\n' "$GITHUB_SHA" "$code" > "$RUNNER_TEMP/cr01-full-receipt.txt"
+          cat "$RUNNER_TEMP/cr01-full-receipt.txt"
+          exit "$code"
+      - name: Preserve whole-script negative and positive receipts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cr01-full-${{ matrix.os }}-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/cr01-full.json
+            ${{ runner.temp }}/cr01-full.stderr
+            ${{ runner.temp }}/cr01-full-receipt.txt
+          retention-days: 30
