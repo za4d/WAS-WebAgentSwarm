@@ -361,8 +361,13 @@ const server = http.createServer((req, res) => {
           mayHaveExecuted:consumed.error.includes('already consumed')});
       }
       awaitResult(id, 'send-result', res, 12000);
+      const r8 = admission.permit || null;
       sendToCurrentProfile(JSON.stringify({
-        type: 'send', id, tabId, text, commandId, expectedUrl
+        type: 'send', id, tabId, text, commandId, expectedUrl,
+        r8AttemptId: r8?.attemptId || '',
+        r8Recipient: r8?.recipient || '',
+        r8Generation: r8?.generation || 0,
+        bodySha256: r8?.bodySha256 || ''
       }));
     });
     return;
