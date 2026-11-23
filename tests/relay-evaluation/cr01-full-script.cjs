@@ -110,7 +110,7 @@ function callbackRegistry(){
 
 function backgroundFixture({
   persisted={}, onContent=null, rejectWrite=false, rejectRead=false,
-  delayTab=false, tabUrl=GOOD
+  delayTab=false, holdFirstFinal=false, tabUrl=GOOD
 }={}){
   const messages=[];
   const sockets=[];
@@ -118,7 +118,8 @@ function backgroundFixture({
     windowId:1,index:0,active:true,status:'complete',autoDiscardable:false}];
   const state = {sent:0, injected:0, messages, sockets, tabs,
     commandStore:persisted, failWrites:rejectWrite, handler:onContent,
-    tabBarrier:null, releaseTab:null};
+    tabBarrier:null, releaseTab:null,
+    firstFinalHeld:false, releaseFirstFinal:null};
   if(delayTab){
     state.tabBarrier=new Promise(resolve=>{state.releaseTab=resolve;});
   }
@@ -168,7 +169,19 @@ function backgroundFixture({
         },
         async set(updates){
           if(state.failWrites)throw Error('synthetic storage denied');
-          Object.assign(persisted,structuredClone(updates));
+          const copied=structuredClone(updates);
+          const oldList=copied.wasCommandResultsV1;
+          const firstOld=Array.isArray(oldList) && oldList.length===1
+            && oldList[0]?.commandId==='cr01_interleaved_A'
+            && oldList[0]?.result?.ok===true;
+          const firstNew=Object.entries(copied).some(([k,v])=>
+            k.endsWith('cr01_interleaved_A')
+            && v?.result?.ok===true);
+          if(holdFirstFinal && (firstOld || firstNew) && !state.firstFinalHeld){
+            state.firstFinalHeld=true;
+            await new Promise(resolve=>{state.releaseFirstFinal=resolve;});
+          }
+          Object.assign(persisted,copied);
         }
       }
     }
@@ -474,6 +487,25 @@ async function run(){
     ]);
     assert.equal(content.state.clicks,1);
     assert.equal([a.ok,b.ok].filter(Boolean).length,1);
+  });
+  await testcase('B14 out-of-order independent Send writes cannot erase a durable receipt',async()=>{
+    const persisted={};
+    const f=backgroundFixture({persisted,holdFirstFinal:true});
+    const sock=await f.ready();
+    const first=f.dispatch(sock,'a','cr01_interleaved_A');
+    for(let i=0;i<120&&!f.state.firstFinalHeld;i++)await flush(2);
+    assert.equal(f.state.firstFinalHeld,true,'Must hold A terminal write');
+    const second=await f.dispatch(sock,'b','cr01_interleaved_B');
+    assert.equal(second.ok,true);
+    assert.equal(f.state.sent,2,'Distinct command effects were modelled');
+    f.state.releaseFirstFinal();
+    await first;
+    const reboot=backgroundFixture({persisted});
+    const nextSocket=await reboot.ready();
+    const repeat=await reboot.dispatch(nextSocket,'b-retry','cr01_interleaved_B');
+    assert.equal(repeat.duplicate,true,
+      'Late storage write lost B receipt: restarted worker would replay B');
+    assert.equal(reboot.state.sent,0);
   });
   const pass=cases.filter(c=>c.verdict==='PASS').length;
   console.log(JSON.stringify({
