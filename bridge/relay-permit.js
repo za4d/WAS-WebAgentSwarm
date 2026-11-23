@@ -66,12 +66,41 @@ export function verifyRelayPermit(data) {
   return {ok:true, mode:'relay_required', permit:p};
 }
 
+// RB-02/SR3: The receipt directory must already exist under the trusted
+// account. Never create this directory during a permitted physical Send:
+// making it on demand leaves a parent-directory crash-persistence gap.
+// On Windows a separate operator/host test MUST verify the NTFS ACL and
+// service-account access. JS lstat alone does not establish Windows ACLs.
+export function checkRelayReceiptStore() {
+  if (RELAY_SEND_MODE !== 'relay_required') return {ok:true,mode:RELAY_SEND_MODE};
+  if (!RECEIPTS || !path.isAbsolute(RECEIPTS)) {
+    return {ok:false,error:'R8 receipt store must be an absolute pre-provisioned path.'};
+  }
+  try {
+    const st=fs.lstatSync(RECEIPTS);
+    if (!st.isDirectory() || st.isSymbolicLink()) {
+      return {ok:false,error:'R8 receipt store is not a real directory.'};
+    }
+    if (process.platform !== 'win32') {
+      // On POSIX the bridge must own a mode-0700 trusted receipt directory.
+      if ((st.mode & 0o077) !== 0 ||
+          (typeof process.getuid === 'function' && st.uid !== process.getuid())) {
+        return {ok:false,error:'R8 receipt directory owner or mode is unsafe.'};
+      }
+    }
+    return {ok:true,mode:'relay_required'};
+  } catch {
+    return {ok:false,error:'R8 receipt directory unavailable or unreadable.'};
+  }
+}
+
 export function consumeRelayPermit(verified) {
   if (!verified?.ok) return {ok:false,error:'No authenticated R8 permit.'};
   if(verified.mode==='legacy_explicit')return {ok:true,mode:'legacy_explicit'};
   const p=verified.permit;
+  const ready=checkRelayReceiptStore();
+  if (!ready.ok) return ready;
   try {
-    fs.mkdirSync(RECEIPTS,{recursive:true,mode:0o700});
     const file=path.join(RECEIPTS,p.attemptId+'.json');
     // Last effectful admission point: durable and exclusive before WebSocket
     // dispatch. A crash after creation sacrifices liveness, never retries.
