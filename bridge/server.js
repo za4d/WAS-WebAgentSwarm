@@ -321,8 +321,8 @@ const server = http.createServer((req, res) => {
         return;
       }
 
-      const text = String(data.text || '').trim();
-      if (!text) return json(res, 400, { ok: false, error: 'text is required.' });
+      const text = String(data.text || '');
+      if (!text.trim()) return json(res, 400, { ok: false, error: 'text is required.' });
       const tabId = Number.isInteger(data.tabId) ? data.tabId : undefined;
       const commandId = String(data.commandId || '').trim();
       const expectedUrl = String(data.expectedUrl || '').trim();
