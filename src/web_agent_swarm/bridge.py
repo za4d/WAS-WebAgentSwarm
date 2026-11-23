@@ -235,8 +235,8 @@ class BridgeClient:
         command_id: str = "",
         expected_url: str = "",
     ) -> Dict[str, object]:
-        message = str(text or "").strip()
-        if not message:
+        message = str(text or "")
+        if not message.strip():
             return {"ok": False, "error": "text is required"}
         clean_command_id = str(command_id or "").strip()
         pinned_url = str(expected_url or "").strip()

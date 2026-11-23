@@ -146,7 +146,11 @@ function awaitResult(id, type, res, timeoutMs = 5000) {
       mayHaveExecuted: type === 'send-result'
     });
   }, timeoutMs);
-  pending.set(id, { type, res, timer });
+  // Bind every outstanding receipt to the *specific* extension socket
+  // which was selected for dispatch. Another profile may connect before
+  // the acknowledgement returns; it must not be able to complete this
+  // request by echoing a known request ID.
+  pending.set(id, { type, res, timer, client: connectedClient() });
 }
 
 function ensureClient(res) {
@@ -317,8 +321,8 @@ const server = http.createServer((req, res) => {
         return;
       }
 
-      const text = String(data.text || '').trim();
-      if (!text) return json(res, 400, { ok: false, error: 'text is required.' });
+      const text = String(data.text || '');
+      if (!text.trim()) return json(res, 400, { ok: false, error: 'text is required.' });
       const tabId = Number.isInteger(data.tabId) ? data.tabId : undefined;
       const commandId = String(data.commandId || '').trim();
       const expectedUrl = String(data.expectedUrl || '').trim();
@@ -420,7 +424,7 @@ wss.on('connection', ws => {
         return;
       }
       const item = pending.get(msg.id);
-      if (!item || item.type !== msg.type) return;
+      if (!item || item.type !== msg.type || item.client !== ws) return;
       clearTimeout(item.timer);
       pending.delete(msg.id);
       if (msg.type === 'tabs-result') {

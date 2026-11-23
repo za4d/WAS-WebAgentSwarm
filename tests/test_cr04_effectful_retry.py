@@ -79,6 +79,33 @@ class RuntimeSendEffectBoundaries(unittest.TestCase):
         self.assertEqual(len(bridge.calls), 1)
         self.assertEqual(transactions[0]["status"], "ok")
 
+    def test_non_timeout_502_after_possible_click_remains_unknown_effect(self):
+        # The real extension can return a 502 with mayHaveExecuted=true when
+        # its content script clicked but the callback failed. It is NOT safe
+        # to record that outcome as an ordinary pre-effect 'failed' send.
+        bridge = ControlledBridge(send_reply={
+            "ok": False, "http_status": 502,
+            "error": "Synthetic callback lost after modelled click",
+            "mayHaveExecuted": True,
+        })
+        outcome, transactions = self.run_case(bridge)
+        self.assertFalse(outcome["ok"])
+        self.assertEqual(len(bridge.calls), 1)
+        self.assertTrue(outcome["send_health"]["may_have_executed"])
+        self.assertEqual(transactions[0]["status"], "unknown")
+        self.assertTrue(transactions[0]["may_have_executed"])
+
+    def test_acknowledged_click_receipt_records_possible_effect(self):
+        bridge = ControlledBridge(send_reply={
+            "ok": True, "status": "synthetic click acknowledgement",
+            "mayHaveExecuted": True,
+        })
+        outcome, transactions = self.run_case(bridge)
+        self.assertTrue(outcome["ok"])
+        self.assertTrue(outcome["send_health"]["may_have_executed"])
+        self.assertEqual(transactions[0]["status"], "ok")
+        self.assertTrue(transactions[0]["may_have_executed"])
+
     def test_generating_tab_has_zero_effectful_dispatch(self):
         bridge = ControlledBridge(generating=True)
         outcome, transactions = self.run_case(bridge)

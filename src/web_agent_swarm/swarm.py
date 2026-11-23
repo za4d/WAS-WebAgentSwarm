@@ -2080,7 +2080,14 @@ class SwarmRuntime:
             "last_attempts": int(result.get("attempts") or 0),
             "last_latency_ms": int(max(0.0, elapsed_seconds) * 1000),
             "ack_timeout": bool(ack_timeout),
-            "may_have_executed": bool(ack_timeout),
+            # A non-timeout HTTP 502 can follow a real content click.
+            # The extension explicitly propagates mayHaveExecuted for this
+            # case; never downgrade its evidence to a safe pre-effect failure.
+            "may_have_executed": bool(
+                ok or ack_timeout
+                or result.get("mayHaveExecuted") is True
+                or result.get("may_have_executed") is True
+            ),
         }
         updated["send_health"] = health
         self.store.bind(clean_name, updated)
@@ -2115,6 +2122,7 @@ class SwarmRuntime:
             "ok" if result.get("ok")
             else "busy" if result.get("busy")
             else "ack_timeout" if health.get("ack_timeout")
+            else "unknown" if health.get("may_have_executed")
             else "failed"
         )
         result["send_transaction"] = self.store.send_transaction_record(
