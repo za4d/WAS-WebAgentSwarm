@@ -2,16 +2,31 @@ const DEFAULT_WS = 'ws://127.0.0.1:8788/ws';
 const PROTOCOL_MIN = 5;
 const PROTOCOL_MAX = 5;
 const COMMAND_CACHE_KEY = 'wasCommandResultsV1';
+const RECONNECT_ALARM = 'was-cr01-bridge-reconnect';
 
 let socket = null;
 let reconnectTimer = null;
 let keepAliveTimer = null;
 let connectInFlight = false;
 let bridgeHandshakeOk = false;
+let commandCacheReady = false;
 const commandResults = new Map();
 const commandInflight = new Map();
 const knownChatTabs = new Map();
 const MAX_COMMAND_CACHE = 256;
+
+function validPinnedChatUrl(raw) {
+  try {
+    const url = new URL(raw);
+    return url.origin === 'https://chatgpt.com'
+      && !url.search && !url.hash
+      && (url.pathname === '/'
+        || /^\/c\/[^/]+\/?$/.test(url.pathname)
+        || /^\/g\/[^/]+(?:\/c\/[^/]+)?\/?$/.test(url.pathname));
+  } catch {
+    return false;
+  }
+}
 
 function isChatGptTab(tab) {
   return Boolean(tab?.id && tab?.url?.startsWith('https://chatgpt.com/'));
@@ -86,25 +101,47 @@ async function persistCommandResults() {
 }
 
 async function hydrateCommandResults() {
+  commandCacheReady = false;
   try {
     const stored = await chrome.storage.local.get([COMMAND_CACHE_KEY]);
-    const entries = Array.isArray(stored[COMMAND_CACHE_KEY]) ? stored[COMMAND_CACHE_KEY] : [];
+    const raw = stored[COMMAND_CACHE_KEY];
+    if (raw !== undefined && !Array.isArray(raw)) {
+      throw new Error('Command cache has an unexpected shape.');
+    }
+    const entries = raw || [];
     for (const entry of entries.slice(-MAX_COMMAND_CACHE)) {
       const commandId = String(entry?.commandId || '').trim();
-      if (!commandId || !entry?.result || typeof entry.result !== 'object') continue;
+      if (!/^[A-Za-z0-9_-]{1,128}$/.test(commandId) ||
+          !entry?.result || typeof entry.result !== 'object' ||
+          Array.isArray(entry.result)) {
+        throw new Error('Command cache includes an invalid receipt.');
+      }
       commandResults.set(commandId, entry.result);
     }
-  } catch {}
+    commandCacheReady = true;
+  } catch {
+    // A fresh in-memory Map is NOT proof that the previous worker performed
+    // no Send. Keep the extension connected for read-only inspection, but
+    // block every physical Send until durable state can be recovered.
+    commandResults.clear();
+    commandCacheReady = false;
+  }
 }
 
-async function rememberCommand(commandId, result) {
-  if (!commandId) return;
+async function rememberCommand(commandId, result, required = false) {
+  if (!commandId) throw new Error('Cannot persist an unnamed Send command.');
   commandResults.set(commandId, { ...result, commandId });
   while (commandResults.size > MAX_COMMAND_CACHE) {
     const oldest = commandResults.keys().next().value;
     commandResults.delete(oldest);
   }
-  try { await persistCommandResults(); } catch {}
+  try {
+    await persistCommandResults();
+  } catch (error) {
+    // A pre-effect reservation MUST be durable. Failing to persist it
+    // means there is no permission to cross the physical Send boundary.
+    if (required) throw error;
+  }
 }
 
 async function getWsUrl() {
@@ -201,9 +238,17 @@ async function callContent(tab, message) {
     throw new Error('Target ChatGPT tab did not finish loading.');
   }
 
+  if (message?.type === 'send-chatgpt-message' &&
+      readyTab.url !== message.expectedUrl) {
+    throw new Error('Target conversation changed before dispatch.');
+  }
   try {
     return await chrome.tabs.sendMessage(readyTab.id, message);
-  } catch {
+  } catch (error) {
+    // An effectful message may already have clicked Send when the callback
+    // was lost. Never re-inject and re-dispatch this message.
+    if (message?.type === 'send-chatgpt-message') throw error;
+    // Read-only inspection can safely recover a missing content script.
     await chrome.scripting.executeScript({
       target: { tabId: readyTab.id },
       files: ['content.js']
@@ -259,11 +304,15 @@ async function performSend(tab, payload) {
   try {
     const result = await callContent(tab, {
       type: 'send-chatgpt-message',
-      text: payload.text
+      text: payload.text,
+      commandId: payload.commandId,
+      expectedUrl: payload.expectedUrl
     });
     return {
       ok: Boolean(result?.ok),
-      error: result?.error || null,
+      error: result?.error || (!result ? 'No content-script Send acknowledgement.' : null),
+      mayHaveExecuted: result?.mayHaveExecuted === true || !result,
+      terminal: result?.terminal === true,
       tabId: tab.id,
       tabTitle: tab.title || '',
       tabUrl: tab.url || '',
@@ -273,63 +322,144 @@ async function performSend(tab, payload) {
     return {
       ok: false,
       error: String(error),
+      mayHaveExecuted: true,
       tabId: tab?.id,
       commandId: String(payload.commandId || '')
     };
   }
 }
 
+function uncertainCommandResult(commandId) {
+  return {
+    ok: false,
+    status: 'UNKNOWN',
+    error: 'A previous Send attempt may have executed; no replay authorised.',
+    mayHaveExecuted: true,
+    terminal: true,
+    commandId
+  };
+}
+
+async function runReservedSend(payload, commandId) {
+  const tab = await resolveChatTab(payload.tabId);
+  if (!tab?.id) {
+    const missing = {
+      ok: false,
+      error: 'Target tab was not found or is not ChatGPT.',
+      mayHaveExecuted: false,
+      commandId
+    };
+    await rememberCommand(commandId, missing);
+    return missing;
+  }
+
+  if (tab.url !== payload.expectedUrl) {
+    const wrong = {
+      ok: false,
+      error: 'Target tab no longer matches the pinned conversation.',
+      mayHaveExecuted: false,
+      commandId
+    };
+    await rememberCommand(commandId, wrong);
+    return wrong;
+  }
+
+  // This durable receipt is written BEFORE the first possibly effectful
+  // chrome.tabs.sendMessage. On service-worker restart its presence prevents
+  // replay, even if the actual callback/result was never stored.
+  try {
+    await rememberCommand(commandId, {
+      ...uncertainCommandResult(commandId),
+      phase: 'attempting',
+      tabId: tab.id,
+      tabUrl: tab.url
+    }, true);
+  } catch {
+    return {
+      ok: false,
+      error: 'Cannot persist Send reservation; no physical Send attempted.',
+      mayHaveExecuted: false,
+      commandId
+    };
+  }
+  const result = await performSend(tab, { ...payload, commandId });
+  await rememberCommand(commandId, result);
+  return result;
+}
+
 async function send(payload) {
   const commandId = String(payload.commandId || '').trim();
-  if (commandId && commandResults.has(commandId)) {
+  if (!commandCacheReady) {
     sendSocket({
-      type: 'send-result',
-      id: payload.id,
-      ...commandResults.get(commandId),
+      type: 'send-result', id: payload.id, ok: false,
+      error: 'Persisted command history unavailable; Send is disabled.',
+      mayHaveExecuted: true, status: 'UNKNOWN'
+    });
+    return;
+  }
+  if (!/^[A-Za-z0-9_-]{1,128}$/.test(commandId) ||
+      !Number.isInteger(payload.tabId) || payload.tabId <= 0 ||
+      !validPinnedChatUrl(payload.expectedUrl)) {
+    sendSocket({
+      type: 'send-result', id: payload.id, ok: false,
+      error: 'Valid commandId, explicit tabId and pinned expectedUrl are required.',
+      mayHaveExecuted: false
+    });
+    return;
+  }
+  if (commandResults.has(commandId)) {
+    const old = commandResults.get(commandId);
+    sendSocket({
+      type: 'send-result', id: payload.id,
+      ...(old?.phase === 'attempting' ? uncertainCommandResult(commandId) : old),
       duplicate: true
     });
     return;
   }
-
-  if (commandId && commandInflight.has(commandId)) {
+  if (commandInflight.has(commandId)) {
     const result = await commandInflight.get(commandId);
     sendSocket({ type: 'send-result', id: payload.id, ...result, duplicate: true });
     return;
   }
 
-  const tab = await resolveChatTab(payload.tabId);
-  if (!tab?.id) {
-    const result = {
-      ok: false,
-      error: 'Target tab was not found or is not ChatGPT.',
-      commandId
-    };
-    if (commandId) await rememberCommand(commandId, result);
-    sendSocket({ type: 'send-result', id: payload.id, ...result });
-    return;
-  }
-
-  const work = performSend(tab, payload);
-  if (commandId) commandInflight.set(commandId, work);
-  const result = await work;
-  if (commandId) {
+  // Register the in-flight command synchronously, before the first await,
+  // to exclude concurrent duplicate requests arriving during tab lookup.
+  const work = runReservedSend(payload, commandId).catch(error => ({
+    ...uncertainCommandResult(commandId),
+    error: 'Send stage failed unexpectedly: ' + String(error)
+  }));
+  commandInflight.set(commandId, work);
+  try {
+    const result = await work;
+    sendSocket({ type: 'send-result', id: payload.id, ...result, duplicate: false });
+  } finally {
     commandInflight.delete(commandId);
-    await rememberCommand(commandId, result);
   }
-  sendSocket({ type: 'send-result', id: payload.id, ...result, duplicate: false });
 }
 
 async function commandStatus(payload) {
   const commandId = String(payload.commandId || '').trim();
+  if (!commandCacheReady) {
+    sendSocket({
+      type: 'command-status-result', id: payload.id,
+      ok: false, found: false, completed: false, uncertain: true,
+      commandId,
+      error: 'Persisted command history unavailable.'
+    });
+    return;
+  }
   if (commandResults.has(commandId)) {
+    const result = commandResults.get(commandId);
+    const unresolved = result?.phase === 'attempting';
     sendSocket({
       type: 'command-status-result',
       id: payload.id,
       ok: true,
       found: true,
-      completed: true,
+      completed: !unresolved,
+      uncertain: unresolved,
       commandId,
-      result: commandResults.get(commandId)
+      result: unresolved ? uncertainCommandResult(commandId) : result
     });
     return;
   }
@@ -340,6 +470,7 @@ async function commandStatus(payload) {
       ok: true,
       found: true,
       completed: false,
+      uncertain: true,
       commandId
     });
     return;

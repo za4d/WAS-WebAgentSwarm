@@ -43,14 +43,21 @@ class BridgeClientTest(unittest.TestCase):
             "_json",
             return_value={"ok": True},
         ) as bridge_call:
-            result = client.send(7, "continue", command_id="cmd-123")
+            result = client.send(7, "continue", command_id="cmd-123", expected_url="https://chatgpt.com/c/same")
         self.assertTrue(result["ok"])
         bridge_call.assert_called_once_with(
             "/send",
             method="POST",
-            payload={"tabId": 7, "text": "continue", "commandId": "cmd-123"},
+            payload={"tabId": 7, "text": "continue", "commandId": "cmd-123", "expectedUrl": "https://chatgpt.com/c/same"},
             timeout=14.0,
         )
+
+    def test_send_requires_original_target_and_command_id(self):
+        client = BridgeClient("http://example.invalid")
+        with mock.patch.object(client, "_json") as bridge_call:
+            self.assertFalse(client.send(7, "continue", command_id="cmd-123")["ok"])
+            self.assertFalse(client.send(7, "continue", expected_url="https://chatgpt.com/c/same")["ok"])
+        bridge_call.assert_not_called()
 
     def test_close_tab_uses_bridge_close_endpoint(self):
         client = BridgeClient("http://example.invalid")
