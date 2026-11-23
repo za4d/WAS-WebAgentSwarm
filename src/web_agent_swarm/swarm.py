@@ -1270,6 +1270,7 @@ class SwarmRuntime:
         text: str,
         timeout: float = 20.0,
         command_id: str = "",
+        expected_url: str = "",
     ) -> Dict[str, object]:
         # Retain timeout in the public signature; it must never justify a
         # second potentially effectful /send after a lost callback. The bridge
@@ -1289,7 +1290,17 @@ class SwarmRuntime:
         # Exactly one outbound bridge call per permitted runtime invocation.
         # A retry, including one reusing command_id, requires external proof
         # that the prior invocation had no physical Send effect.
-        result = self.bridge.send(tab_id, text, command_id=active_command_id)
+        if not expected_url:
+            return {
+                "ok": False,
+                "error": "Pinned conversation URL is required for browser Send.",
+                "command_id": active_command_id,
+                "attempts": 0,
+            }
+        result = self.bridge.send(
+            tab_id, text, command_id=active_command_id,
+            expected_url=expected_url,
+        )
         result["command_id"] = active_command_id
         result["attempts"] = 1
         return result
@@ -1554,6 +1565,7 @@ class SwarmRuntime:
         sent = self._send_when_ready(
             int(tab["id"]),
             self._worker_prompt(clean_role, name),
+            expected_url=str(tab.get("url") or ""),
         )
         if not sent.get("ok"):
             return {
@@ -1685,7 +1697,9 @@ class SwarmRuntime:
                     if kind == "main"
                     else self._worker_prompt(role, name)
                 )
-                sent = self._send_when_ready(int(tab["id"]), prompt)
+                sent = self._send_when_ready(
+                    int(tab["id"]), prompt, expected_url=str(tab.get("url") or "")
+                )
                 if not sent.get("ok"):
                     records.append({
                         "name": name,
@@ -1712,7 +1726,10 @@ class SwarmRuntime:
                     "before concrete work; heartbeat/release the lease and do not repeat "
                     "completed or currently leased work."
                 ).format(name, role)
-                sent = self._send_when_ready(int(tab["id"]), prompt, timeout=3.0)
+                sent = self._send_when_ready(
+                    int(tab["id"]), prompt, timeout=3.0,
+                    expected_url=str(tab.get("url") or ""),
+                )
                 if not sent.get("ok") and not sent.get("busy"):
                     records.append({
                         "name": name,
@@ -2092,6 +2109,7 @@ class SwarmRuntime:
             text,
             timeout=24.0,
             command_id=command_id,
+            expected_url=str(tab.get("url") or ""),
         )
         result["name"] = clean_name
         result["send_health"] = self._record_send_health(
@@ -2166,7 +2184,10 @@ class SwarmRuntime:
             "treat the durable WebAgentSwarm store/graph as coordination truth and resume from it. "
             + self._main_prompt(active_roles)
         )
-        sent = self._send_when_ready(int(new_tab["id"]), prompt, timeout=10.0)
+        sent = self._send_when_ready(
+            int(new_tab["id"]), prompt, timeout=10.0,
+            expected_url=str(new_tab.get("url") or ""),
+        )
         if not sent.get("ok"):
             try:
                 self.bridge.close_tab(int(new_tab["id"]))
@@ -2397,7 +2418,10 @@ class SwarmRuntime:
             "lease already claimed_by {0}; resume and heartbeat that exact work when present. Do not depend on "
             "old chat memory. "
         ).format(clean_name, role) + self._worker_prompt(role, clean_name)
-        sent = self._send_when_ready(int(new_tab["id"]), prompt, timeout=10.0)
+        sent = self._send_when_ready(
+            int(new_tab["id"]), prompt, timeout=10.0,
+            expected_url=str(new_tab.get("url") or ""),
+        )
         if not sent.get("ok"):
             try:
                 self.bridge.close_tab(int(new_tab["id"]))
