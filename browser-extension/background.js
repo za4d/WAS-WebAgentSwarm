@@ -2,6 +2,7 @@ const DEFAULT_WS = 'ws://127.0.0.1:8788/ws';
 const PROTOCOL_MIN = 5;
 const PROTOCOL_MAX = 5;
 const COMMAND_CACHE_KEY = 'wasCommandResultsV1';
+const RECONNECT_ALARM = 'was-cr01-bridge-reconnect';
 
 let socket = null;
 let reconnectTimer = null;
