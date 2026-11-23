@@ -606,6 +606,65 @@ class DurableStoreTest(unittest.TestCase):
             self.assertEqual(result["status"], "conflict")
             self.assertIn("conflicting pending writes", result["error"])
             self.assertNotIn("shared", store.status())
+    def test_cr01_di01_rejects_reassignment_and_regressive_uncertain_receipt(self):
+        # Reviewer S follow-up DI-01: the same R8 command must never have
+        # its durable target, recipient-name, uncertainty or evidence replaced.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store = DurableStore(root)
+            command = "r8_" + "f" * 32
+            store.send_transaction_record(
+                command, name="reviewer", tab_id=73, status="attempting",
+                relay_attempt_id="f" * 32, relay_recipient="R",
+                relay_generation=1, body_sha256="a" * 64,
+                expected_url="https://chatgpt.com/c/rrrr3333",
+            )
+            store.send_transaction_record(
+                command, status="unknown", result={"error": "lost callback"},
+                may_have_executed=True,
+            )
+            store = DurableStore(root)  # actual on-disk reload
+            before = store.send_transaction_get(command)
+            for changes in (
+                {"name": "another-worker", "status": "unknown"},
+                {"tab_id": 74, "status": "unknown"},
+                {"status": "failed"},
+                {"status": "attempting"},
+                {"status": "busy"},
+                {"status": "ok"},
+                {"status": "unknown", "result": {"ok": True}},
+            ):
+                with self.subTest(changes=changes):
+                    with self.assertRaisesRegex(ValueError, "immutable|regressive|terminal"):
+                        store.send_transaction_record(command, **changes)
+                    self.assertEqual(store.send_transaction_get(command), before)
+            # A no-op repeat with omitted identity/status evidence stays
+            # legal, preserving an existing uncertain receipt byte-for-byte.
+            same = store.send_transaction_record(command, status="unknown")
+            for field in ("name", "tab_id", "status", "result", "may_have_executed",
+                          "relay_attempt_id", "body_sha256"):
+                self.assertEqual(same[field], before[field])
+
+    def test_cr01_di01_rejects_terminal_success_rewritten_to_failure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = DurableStore(Path(tmp))
+            command = "r8_" + "e" * 32
+            store.send_transaction_record(
+                command, name="reviewer", tab_id=73, status="attempting",
+                relay_attempt_id="e" * 32, relay_recipient="R",
+                relay_generation=1, body_sha256="b" * 64,
+                expected_url="https://chatgpt.com/c/rrrr3333",
+            )
+            store.send_transaction_record(
+                command, status="ok", result={"ok": True},
+                may_have_executed=True,
+            )
+            with self.assertRaisesRegex(ValueError, "immutable|regressive|terminal"):
+                store.send_transaction_record(
+                    command, status="failed", result={"ok": False},
+                )
+            self.assertEqual(store.send_transaction_get(command)["status"], "ok")
+
     def test_relay_attempt_receipt_is_immutable_and_survives_diagnostic_limit(self):
         with tempfile.TemporaryDirectory() as tmp:
             store = DurableStore(Path(tmp))
