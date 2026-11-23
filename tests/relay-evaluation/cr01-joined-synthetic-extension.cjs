@@ -8,6 +8,7 @@
  * Tests source selected by a private Relay R8 test runner.
  */
 const fs = require('node:fs');
+const crypto = require('node:crypto');
 const path = require('node:path');
 const vm = require('node:vm');
 const { createRequire } = require('node:module');
@@ -143,7 +144,7 @@ const chrome={
   }
 };
 const workerContext={
-  chrome,URL,WebSocket:WS,globalThis:null,
+  chrome,URL,WebSocket:WS,crypto:crypto.webcrypto,TextEncoder,globalThis:null,
   setInterval,clearInterval,setTimeout,clearTimeout
 };
 workerContext.globalThis=workerContext;

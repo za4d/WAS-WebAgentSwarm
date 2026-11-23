@@ -27,6 +27,7 @@ const GOOD = 'https://chatgpt.com/c/aaaa1111';
 const WRONG = 'https://chatgpt.com/c/bbbb2222';
 const TEXT = 'WAS-CR01-SYNTHETIC-TEXT';
 const flush = async (n=25) => { for(let i=0;i<n;i++) await Promise.resolve(); };
+const settle=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 const storageMap = () => {
   const values = new Map();
   return {
@@ -199,6 +200,7 @@ function backgroundFixture({
     close(){this.readyState=3;if(this.onclose)this.onclose();}
   }
   const sandbox={chrome,WebSocket:FakeSocket,URL,console,
+    crypto:crypto.webcrypto,TextEncoder,
     setInterval:()=>1,clearInterval:()=>{},setTimeout:()=>1,clearTimeout:()=>{},
     globalThis:null};
   sandbox.globalThis=sandbox;
@@ -266,7 +268,7 @@ async function run(){
     const r=await f.call(f.handler);
     assert.equal(r.ok,false);
     assert.equal(f.state.clicks,0);
-    assert.equal(f.state.draft,TEXT+' ');
+    assert.equal(f.state.draft,TEXT+' ','Owner edit after staging must be preserved');
   });
   await testcase('C04 attachment-only draft blocks Send',async()=>{
     const f=contentFixture({attachment:true});
@@ -283,10 +285,11 @@ async function run(){
     const r=await f.call(f.handler);
     assert.equal(r.ok,false);assert.equal(f.state.clicks,0);
   });
-  await testcase('C07 disabled Send button never clicked',async()=>{
+  await testcase('C07 disabled Send button restores owned staged text',async()=>{
     const f=contentFixture({disabled:true});
     const r=await f.call(f.handler);
     assert.equal(r.ok,false);assert.equal(f.state.clicks,0);
+    assert.equal(f.state.draft,'','Pre-click failure must not strand an unowned prompt');
   });
   await testcase('C08 repeated command is consumed even after ACK',async()=>{
     const f=contentFixture();
@@ -359,7 +362,7 @@ async function run(){
     const first=backgroundFixture({persisted,onContent:()=>new Promise(()=>{})});
     const sock1=await first.ready();
     void first.dispatch(sock1,'r1'); // intentionally do not await unresolved effect
-    await flush(150);
+    for(let i=0;i<100 && first.state.sent!==1;i++)await settle(5);
     assert.equal(first.state.sent,1);
     assert.ok(Object.entries(persisted).some(([k,v])=>
       k.startsWith('wasCommandReceiptV2:') && v.result.phase==='attempting'));
@@ -496,7 +499,7 @@ async function run(){
     const f=backgroundFixture({persisted,holdFirstFinal:true});
     const sock=await f.ready();
     const first=f.dispatch(sock,'a','cr01_interleaved_A');
-    for(let i=0;i<120&&!f.state.firstFinalHeld;i++)await flush(2);
+    for(let i=0;i<150&&!f.state.firstFinalHeld;i++)await settle(5);
     assert.equal(f.state.firstFinalHeld,true,'Must hold A terminal write');
     const second=await f.dispatch(sock,'b','cr01_interleaved_B');
     assert.equal(second.ok,true);
@@ -509,6 +512,29 @@ async function run(){
     assert.equal(repeat.duplicate,true,
       'Late storage write lost B receipt: restarted worker would replay B');
     assert.equal(reboot.state.sent,0);
+  });
+  await testcase('B15 same command ID altered body/target rejects cached success',async()=>{
+    const persisted={};
+    const first=backgroundFixture({persisted});
+    const s1=await first.ready();
+    const command='cr01_same_id_changed_envelope_1';
+    const acknowledged=await first.dispatch(s1,'first',command,'ALPHA',GOOD);
+    assert.equal(acknowledged.ok,true);
+    assert.equal(first.state.sent,1);
+    const changedBody=await first.dispatch(s1,'changed',command,'BETA',GOOD);
+    assert.equal(changedBody.ok,false);
+    assert.equal(changedBody.status,'INTEGRITY_VIOLATION');
+    assert.equal(first.state.sent,1);
+    const afterRestart=backgroundFixture({persisted});
+    const s2=await afterRestart.ready();
+    const changedTarget=await afterRestart.dispatch(s2,'changed-url',command,'ALPHA',WRONG);
+    assert.equal(changedTarget.ok,false);
+    assert.equal(changedTarget.status,'INTEGRITY_VIOLATION');
+    assert.equal(afterRestart.state.sent,0);
+    const identical=await afterRestart.dispatch(s2,'identical',command,'ALPHA',GOOD);
+    assert.equal(identical.duplicate,true);
+    assert.equal(identical.ok,true);
+    assert.equal(afterRestart.state.sent,0);
   });
   const pass=cases.filter(c=>c.verdict==='PASS').length;
   console.log(JSON.stringify({

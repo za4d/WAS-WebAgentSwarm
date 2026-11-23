@@ -207,6 +207,9 @@
       return fail('Tab-scoped Send storage unavailable; no click attempted.');
     }
 
+    let stagedTarget = null;
+    let ownedStaging = false;
+    let physicalBoundaryCrossed = false;
     try {
       if (generating()) return fail('Target tab is generating.');
       let target = composer();
@@ -224,6 +227,10 @@
         return fail('Recipient or editor changed before composition.');
       }
 
+      // Mark the editor we own BEFORE the first asynchronous DOM mutation.
+      // A pre-click refusal may restore it only if still byte-for-byte ours.
+      stagedTarget = target;
+      ownedStaging = true;
       await setText(target, cleanText);
       await sleep(250);
 
@@ -256,6 +263,7 @@
         if (sessionStorage.getItem(consumedKey) !== expectedUrl) {
           return fail('Could not persist physical Send marker.');
         }
+        physicalBoundaryCrossed = true;
       } catch {
         return fail('Physical Send marker unavailable; no click attempted.');
       }
@@ -268,6 +276,32 @@
           mayHaveExecuted: true, terminal: true };
       }
     } finally {
+      // Proven no-click failures must not leave automation-owned text looking
+      // like an owner draft. Only revert if it is still exactly our own text.
+      // After the possible click boundary, or if owner edits/attachments
+      // intervened, NEVER clear the composer automatically.
+      if (ownedStaging && !physicalBoundaryCrossed) {
+        try {
+          if (location.href === expectedUrl && composer() === stagedTarget &&
+              stagedTarget.isConnected !== false &&
+              composerText(stagedTarget) === cleanText &&
+              !document.querySelector(
+                '[data-testid="composer-attachments"],' +
+                '[data-testid="attachment-chip"],' +
+                '[data-testid="file-upload-preview"]'
+              )) {
+            await setText(stagedTarget, '');
+          } else {
+            sessionStorage.setItem('__was_cr01_residual_draft_v1:' + cleanCommand,
+              'Manual reconciliation required; editor changed after staging.');
+          }
+        } catch {
+          try { sessionStorage.setItem(
+            '__was_cr01_residual_draft_v1:' + cleanCommand,
+            'Automatic safe restoration failed; manual inspection required.'
+          ); } catch {}
+        }
+      }
       try {
         if (sessionStorage.getItem(ACTIVE_SEND_KEY) === cleanCommand) {
           sessionStorage.removeItem(ACTIVE_SEND_KEY);

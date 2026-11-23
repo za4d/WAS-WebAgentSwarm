@@ -234,6 +234,7 @@ class BridgeClient:
         text: str,
         command_id: str = "",
         expected_url: str = "",
+        relay_permit: Optional[Dict[str, object]] = None,
     ) -> Dict[str, object]:
         message = str(text or "")
         if not message.strip():
@@ -248,6 +249,10 @@ class BridgeClient:
             "commandId": clean_command_id,
             "expectedUrl": pinned_url,
         }
+        if relay_permit is not None:
+            if not isinstance(relay_permit, dict):
+                return {"ok": False, "error": "R8 permit must be a dict"}
+            payload["r8Permit"] = dict(relay_permit)
         return self._json(
             "/send",
             method="POST",

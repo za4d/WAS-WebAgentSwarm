@@ -142,11 +142,12 @@ async function hydrateCommandResults() {
   }
 }
 
-async function rememberCommand(commandId, result, required = false) {
+async function rememberCommand(commandId, result, required = false, fingerprint = '') {
   if (!/^[A-Za-z0-9_-]{1,128}$/.test(String(commandId || ''))) {
     throw new Error('Cannot persist an unnamed or malformed Send command.');
   }
-  const receipt = { ...result, commandId };
+  const receipt = { ...result, commandId,
+    envelopeSha256: fingerprint || commandResults.get(commandId)?.envelopeSha256 || '' };
   commandResults.set(commandId, receipt);
   try {
     await chrome.storage.local.set({
@@ -358,6 +359,22 @@ function uncertainCommandResult(commandId) {
   };
 }
 
+async function envelopeSha256(payload) {
+  const data = JSON.stringify([
+    payload.tabId, payload.expectedUrl, payload.text,
+    payload.r8AttemptId || '', payload.r8Recipient || '',
+    payload.r8Generation || 0, payload.bodySha256 || ''
+  ]);
+  const bytes = new TextEncoder().encode(data);
+  const hash = await crypto.subtle.digest('SHA-256', bytes);
+  return Array.from(new Uint8Array(hash), x => x.toString(16).padStart(2, '0')).join('');
+}
+
+function integrityMismatch(id, reason = 'Send command reused with a different immutable envelope.') {
+  return {type:'send-result', id, ok:false, error:reason,
+    status:'INTEGRITY_VIOLATION', mayHaveExecuted:true, terminal:true};
+}
+
 async function runReservedSend(payload, commandId) {
   const tab = await resolveChatTab(payload.tabId);
   if (!tab?.id) {
@@ -367,7 +384,7 @@ async function runReservedSend(payload, commandId) {
       mayHaveExecuted: false,
       commandId
     };
-    await rememberCommand(commandId, missing);
+    await rememberCommand(commandId, missing, false, payload.envelopeSha256);
     return missing;
   }
 
@@ -378,7 +395,7 @@ async function runReservedSend(payload, commandId) {
       mayHaveExecuted: false,
       commandId
     };
-    await rememberCommand(commandId, wrong);
+    await rememberCommand(commandId, wrong, false, payload.envelopeSha256);
     return wrong;
   }
 
@@ -391,7 +408,7 @@ async function runReservedSend(payload, commandId) {
       phase: 'attempting',
       tabId: tab.id,
       tabUrl: tab.url
-    }, true);
+    }, true, payload.envelopeSha256);
   } catch {
     return {
       ok: false,
@@ -401,7 +418,7 @@ async function runReservedSend(payload, commandId) {
     };
   }
   const result = await performSend(tab, { ...payload, commandId });
-  await rememberCommand(commandId, result);
+  await rememberCommand(commandId, result, false, payload.envelopeSha256);
   return result;
 }
 
@@ -425,8 +442,22 @@ async function send(payload) {
     });
     return;
   }
+  let fingerprint;
+  try {
+    if (typeof payload.text !== 'string' || !payload.text.trim()
+        || payload.text.length > 12000) throw new Error('Invalid immutable body');
+    fingerprint = await envelopeSha256(payload);
+  } catch {
+    sendSocket(integrityMismatch(payload.id,
+      'Cannot hash immutable command envelope; Send disabled.'));
+    return;
+  }
   if (commandResults.has(commandId)) {
     const old = commandResults.get(commandId);
+    if (!old?.envelopeSha256 || old.envelopeSha256 !== fingerprint) {
+      sendSocket(integrityMismatch(payload.id));
+      return;
+    }
     sendSocket({
       type: 'send-result', id: payload.id,
       ...(old?.phase === 'attempting' ? uncertainCommandResult(commandId) : old),
@@ -435,18 +466,23 @@ async function send(payload) {
     return;
   }
   if (commandInflight.has(commandId)) {
-    const result = await commandInflight.get(commandId);
+    const active = commandInflight.get(commandId);
+    if (active.fingerprint !== fingerprint) {
+      sendSocket(integrityMismatch(payload.id));
+      return;
+    }
+    const result = await active.work;
     sendSocket({ type: 'send-result', id: payload.id, ...result, duplicate: true });
     return;
   }
 
   // Register the in-flight command synchronously, before the first await,
   // to exclude concurrent duplicate requests arriving during tab lookup.
-  const work = runReservedSend(payload, commandId).catch(error => ({
+  const work = runReservedSend({...payload,envelopeSha256:fingerprint}, commandId).catch(error => ({
     ...uncertainCommandResult(commandId),
     error: 'Send stage failed unexpectedly: ' + String(error)
   }));
-  commandInflight.set(commandId, work);
+  commandInflight.set(commandId, {work, fingerprint});
   try {
     const result = await work;
     sendSocket({ type: 'send-result', id: payload.id, ...result, duplicate: false });

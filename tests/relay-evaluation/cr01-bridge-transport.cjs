@@ -61,7 +61,8 @@ async function extension(received){
 async function main(){
  const child=spawn(process.execPath,['bridge/server.js'],{
    cwd:ROOT,env:{...process.env,WEB_SWARM_PORT:'18789',
-     WEB_SWARM_BRIDGE_TOKEN:TOKEN,WEB_SWARM_BIND:'127.0.0.1'},
+     WEB_SWARM_BRIDGE_TOKEN:TOKEN,WEB_SWARM_BIND:'127.0.0.1',
+     WEB_SWARM_SEND_MODE:'legacy_explicit' /* standalone compatibility only */},
    stdio:'ignore',windowsHide:true
  });
  const clients=[];
