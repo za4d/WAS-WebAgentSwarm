@@ -233,14 +233,21 @@ class BridgeClient:
         tab_id: int,
         text: str,
         command_id: str = "",
+        expected_url: str = "",
     ) -> Dict[str, object]:
         message = str(text or "").strip()
         if not message:
             return {"ok": False, "error": "text is required"}
-        payload = {"tabId": int(tab_id), "text": message}
         clean_command_id = str(command_id or "").strip()
-        if clean_command_id:
-            payload["commandId"] = clean_command_id
+        pinned_url = str(expected_url or "").strip()
+        if not clean_command_id or not pinned_url:
+            return {"ok": False, "error": "command_id and pinned expected_url are required"}
+        payload = {
+            "tabId": int(tab_id),
+            "text": message,
+            "commandId": clean_command_id,
+            "expectedUrl": pinned_url,
+        }
         return self._json(
             "/send",
             method="POST",
