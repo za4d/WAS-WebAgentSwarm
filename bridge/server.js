@@ -4,6 +4,7 @@ import crypto from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { WebSocketServer, WebSocket } from 'ws';
+import { RELAY_SEND_MODE, verifyRelayPermit, consumeRelayPermit } from './relay-permit.js';
 
 const HOST = process.env.WEB_SWARM_BIND || '127.0.0.1';
 const PORT = Number.parseInt(process.env.WEB_SWARM_PORT || '8788', 10);
@@ -214,6 +215,7 @@ const server = http.createServer((req, res) => {
       protocolMax: PROTOCOL_MAX,
       browserEventSeq,
       authRequired: true,
+      sendPolicy: RELAY_SEND_MODE,
       profilePolicy: 'current_connected_browser_profile_only'
     });
   }
@@ -344,6 +346,19 @@ const server = http.createServer((req, res) => {
       }
       if (!validPinnedChatUrl(expectedUrl)) {
         return json(res, 400, { ok: false, error: 'Pinned ChatGPT target URL is required.' });
+      }
+      // Relay Send authority is not established by a WAS bearer token.
+      // Default deny. In relay_required mode, verify the signed R8 final-send
+      // capability and persist a *deny-only* single-use fence before dispatch.
+      const candidate = { ...data, tabId, text, commandId, expectedUrl };
+      const admission = verifyRelayPermit(candidate);
+      if (!admission.ok) {
+        return json(res, 403, {ok:false,error:admission.error,mayHaveExecuted:false});
+      }
+      const consumed = consumeRelayPermit(admission);
+      if (!consumed.ok) {
+        return json(res, 409, {ok:false,error:consumed.error,
+          mayHaveExecuted:consumed.error.includes('already consumed')});
       }
       awaitResult(id, 'send-result', res, 12000);
       sendToCurrentProfile(JSON.stringify({
