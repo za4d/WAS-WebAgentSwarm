@@ -104,6 +104,17 @@ async function main(){
       tabId:73,text:'fixture',expectedUrl:PIN
     });assert.equal(r.status,400);assert.equal(received.length,1);
   });
+  await check('T09 transport must preserve exact user message whitespace',async()=>{
+    const before=received.length;
+    const original='  leading spaces\\n    indented line\\ntrailing  ';
+    const response=await request('/send','POST',{
+      tabId:73,text:original,commandId:'cr01_message_bytes_1',expectedUrl:PIN
+    });
+    assert.equal(response.status,502);
+    assert.equal(received.length,before+1);
+    assert.equal(received.at(-1).text,original,
+      'Bridge silently modified already-admitted message payload');
+  });
   await check('T08 pending Send receipt must come from selected extension socket',async()=>{
     const commandId='cr01_origin_bound_ack_1';
     suppressRepliesFor.add(commandId);
