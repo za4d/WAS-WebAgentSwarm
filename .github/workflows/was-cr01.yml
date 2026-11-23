@@ -6,6 +6,9 @@ on:
     paths:
       - 'browser-extension/**'
       - 'tests/relay-evaluation/**'
+      - 'tests/test_swarm.py'
+      - 'tests/test_bridge.py'
+      - 'tests/test_cr04_effectful_retry.py'
       - 'src/web_agent_swarm/swarm.py'
       - 'bridge/**'
       - '.github/workflows/was-cr01.yml'
