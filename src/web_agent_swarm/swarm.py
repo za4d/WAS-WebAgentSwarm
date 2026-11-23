@@ -1266,6 +1266,7 @@ class SwarmRuntime:
         timeout: float = 20.0,
         command_id: str = "",
         expected_url: str = "",
+        relay_permit: Optional[Dict[str, object]] = None,
     ) -> Dict[str, object]:
         # Retain timeout in the public signature; it must never justify a
         # second potentially effectful /send after a lost callback. The bridge
@@ -1292,10 +1293,12 @@ class SwarmRuntime:
                 "command_id": active_command_id,
                 "attempts": 0,
             }
-        result = self.bridge.send(
-            tab_id, text, command_id=active_command_id,
-            expected_url=expected_url,
-        )
+        bridge_kwargs = {
+            "command_id": active_command_id, "expected_url": expected_url,
+        }
+        if relay_permit is not None:
+            bridge_kwargs["relay_permit"] = dict(relay_permit)
+        result = self.bridge.send(tab_id, text, **bridge_kwargs)
         result["command_id"] = active_command_id
         result["attempts"] = 1
         return result
@@ -2093,17 +2096,31 @@ class SwarmRuntime:
         self.store.bind(clean_name, updated)
         return health
 
-    def send(self, name: str, text: str) -> Dict[str, object]:
+    def send(self, name: str, text: str,
+             relay_permit: Optional[Dict[str, object]] = None) -> Dict[str, object]:
         clean_name = str(name)
         tab = self._resolve(clean_name)
         if not tab:
             return {"ok": False, "error": "bound conversation is not open"}
-        command_id = uuid.uuid4().hex
+        if relay_permit is not None:
+            if (not isinstance(relay_permit, dict)
+                    or relay_permit.get("commandId") != "r8_" + str(relay_permit.get("attemptId") or "")
+                    or relay_permit.get("tabId") != int(tab["id"])
+                    or relay_permit.get("expectedUrl") != str(tab.get("url") or "")):
+                return {"ok": False, "error": "R8 signed permit does not match resolved tab"}
+            command_id = str(relay_permit["commandId"])
+        else:
+            command_id = uuid.uuid4().hex
         self.store.send_transaction_record(
             command_id,
             name=clean_name,
             tab_id=int(tab["id"]),
             status="attempting",
+            relay_attempt_id=str((relay_permit or {}).get("attemptId") or ""),
+            relay_recipient=str((relay_permit or {}).get("recipient") or ""),
+            relay_generation=int((relay_permit or {}).get("generation") or 0),
+            body_sha256=str((relay_permit or {}).get("bodySha256") or ""),
+            expected_url=str((relay_permit or {}).get("expectedUrl") or ""),
         )
         started = time.monotonic()
         result = self._send_when_ready(
@@ -2112,6 +2129,7 @@ class SwarmRuntime:
             timeout=24.0,
             command_id=command_id,
             expected_url=str(tab.get("url") or ""),
+            relay_permit=relay_permit,
         )
         result["name"] = clean_name
         result["send_health"] = self._record_send_health(
