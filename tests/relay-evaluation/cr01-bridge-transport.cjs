@@ -15,6 +15,7 @@ const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 const file=fs.readFileSync(path.join(ROOT,'bridge/server.js'));
 const blob=crypto.createHash('sha1').update('blob '+file.length+'\0').update(file).digest('hex');
 const results=[];
+const suppressRepliesFor=new Set();
 async function check(name,fn){
  try{await fn();results.push({name,verdict:'PASS'});}
  catch(e){results.push({name,verdict:'FAIL',error:String(e.stack||e).slice(0,800)});}
@@ -51,7 +52,7 @@ async function extension(received){
       clearTimeout(timeout);resolve(ws);return;
     }
     received.push(msg);
-    if(msg.type==='send')ws.send(JSON.stringify({
+    if(msg.type==='send' && !suppressRepliesFor.has(msg.commandId))ws.send(JSON.stringify({
       type:'send-result',id:msg.id,ok:false,error:'Synthetic no-effect receipt'
     }));
   });
@@ -102,6 +103,44 @@ async function main(){
     const r=await request('/send','POST',{
       tabId:73,text:'fixture',expectedUrl:PIN
     });assert.equal(r.status,400);assert.equal(received.length,1);
+  });
+  await check('T08 pending Send receipt must come from selected extension socket',async()=>{
+    const commandId='cr01_origin_bound_ack_1';
+    suppressRepliesFor.add(commandId);
+    const before=received.length;
+    let settled=false;
+    const awaiting=request('/send','POST',{
+      tabId:73,text:'fixture',commandId,expectedUrl:PIN
+    }).then(response=>{settled=true;return response;});
+    for(let i=0;i<70&&received.length===before;i++)await sleep(20);
+    assert.equal(received.length,before+1,'Selected extension did not receive request');
+    const original=received.at(-1);
+    const other=[];
+    const impostor=await extension(other);clients.push(impostor);
+    try{
+      impostor.send(JSON.stringify({
+        type:'send-result',id:original.id,ok:true,
+        claimedBy:'second-profile-not-selected'
+      }));
+      await sleep(120);
+      assert.equal(settled,false,
+        'Bridge accepted an ACK from a different connected profile');
+      one.send(JSON.stringify({
+        type:'send-result',id:original.id,ok:false,
+        error:'Genuine selected client acknowledgement'
+      }));
+      const response=await awaiting;
+      assert.equal(response.status,502);
+      assert.equal(response.body.error,'Genuine selected client acknowledgement');
+    }finally{
+      suppressRepliesFor.delete(commandId);
+      impostor.terminate();
+      for(let i=0;i<50;i++){
+        const status=await request('/health');
+        if(status.body.extensionClients===1)break;
+        await sleep(20);
+      }
+    }
   });
   await check('T07 two connected extensions cause fail-closed routing',async()=>{
     const other=[];const second=await extension(other);clients.push(second);
