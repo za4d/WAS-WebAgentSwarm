@@ -14,6 +14,19 @@ const commandInflight = new Map();
 const knownChatTabs = new Map();
 const MAX_COMMAND_CACHE = 256;
 
+function validPinnedChatUrl(raw) {
+  try {
+    const url = new URL(raw);
+    return url.origin === 'https://chatgpt.com'
+      && !url.search && !url.hash
+      && (url.pathname === '/'
+        || /^\/c\/[^/]+\/?$/.test(url.pathname)
+        || /^\/g\/[^/]+(?:\/c\/[^/]+)?\/?$/.test(url.pathname));
+  } catch {
+    return false;
+  }
+}
+
 function isChatGptTab(tab) {
   return Boolean(tab?.id && tab?.url?.startsWith('https://chatgpt.com/'));
 }
@@ -276,7 +289,7 @@ async function performSend(tab, payload) {
       type: 'send-chatgpt-message',
       text: payload.text,
       commandId: payload.commandId,
-      expectedUrl: tab.url
+      expectedUrl: payload.expectedUrl
     });
     return {
       ok: Boolean(result?.ok),
@@ -323,6 +336,17 @@ async function runReservedSend(payload, commandId) {
     return missing;
   }
 
+  if (tab.url !== payload.expectedUrl) {
+    const wrong = {
+      ok: false,
+      error: 'Target tab no longer matches the pinned conversation.',
+      mayHaveExecuted: false,
+      commandId
+    };
+    await rememberCommand(commandId, wrong);
+    return wrong;
+  }
+
   // This durable receipt is written BEFORE the first possibly effectful
   // chrome.tabs.sendMessage. On service-worker restart its presence prevents
   // replay, even if the actual callback/result was never stored.
@@ -349,10 +373,11 @@ async function runReservedSend(payload, commandId) {
 async function send(payload) {
   const commandId = String(payload.commandId || '').trim();
   if (!/^[A-Za-z0-9_-]{1,128}$/.test(commandId) ||
-      !Number.isInteger(payload.tabId)) {
+      !Number.isInteger(payload.tabId) || payload.tabId <= 0 ||
+      !validPinnedChatUrl(payload.expectedUrl)) {
     sendSocket({
       type: 'send-result', id: payload.id, ok: false,
-      error: 'Valid commandId and explicit target tabId are required.',
+      error: 'Valid commandId, explicit tabId and pinned expectedUrl are required.',
       mayHaveExecuted: false
     });
     return;
