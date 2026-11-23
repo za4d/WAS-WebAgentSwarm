@@ -511,6 +511,29 @@ async function run(){
       'Late storage write lost B receipt: restarted worker would replay B');
     assert.equal(reboot.state.sent,0);
   });
+  await testcase('B15 same command ID altered body/target rejects cached success',async()=>{
+    const persisted={};
+    const first=backgroundFixture({persisted});
+    const s1=await first.ready();
+    const command='cr01_same_id_changed_envelope_1';
+    const acknowledged=await first.dispatch(s1,'first',command,'ALPHA',GOOD);
+    assert.equal(acknowledged.ok,true);
+    assert.equal(first.state.sent,1);
+    const changedBody=await first.dispatch(s1,'changed',command,'BETA',GOOD);
+    assert.equal(changedBody.ok,false);
+    assert.equal(changedBody.status,'INTEGRITY_VIOLATION');
+    assert.equal(first.state.sent,1);
+    const afterRestart=backgroundFixture({persisted});
+    const s2=await afterRestart.ready();
+    const changedTarget=await afterRestart.dispatch(s2,'changed-url',command,'ALPHA',WRONG);
+    assert.equal(changedTarget.ok,false);
+    assert.equal(changedTarget.status,'INTEGRITY_VIOLATION');
+    assert.equal(afterRestart.state.sent,0);
+    const identical=await afterRestart.dispatch(s2,'identical',command,'ALPHA',GOOD);
+    assert.equal(identical.duplicate,true);
+    assert.equal(identical.ok,true);
+    assert.equal(afterRestart.state.sent,0);
+  });
   const pass=cases.filter(c=>c.verdict==='PASS').length;
   console.log(JSON.stringify({
     id:'CR01-FULL-SCRIPT-OFFLINE',
