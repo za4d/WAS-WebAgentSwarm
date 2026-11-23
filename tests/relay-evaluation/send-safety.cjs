@@ -49,6 +49,9 @@ async function testContent(js, { url, expectedUrl, initialDraft = '', navigateOn
   const sendButton = { disabled: false, click() { s.clicks++; } };
   const editor = {
     focus() {},
+    get textContent() { return s.draft; },
+    get innerText() { return s.draft; },
+    get value() { return s.draft; },
     replaceChildren() { s.draft = ''; },
     appendChild(elem) { s.draft = String(elem.textContent || ''); },
     dispatchEvent(event) {
@@ -124,10 +127,18 @@ async function testLostCallback(js) {
     'waitForTabComplete',
     extractAsyncFunction(js, 'callContent') + '; return callContent;'
   )(fakeChrome, pass, pass, pass);
-  const reply = await callContent({
-    id: 77, url: 'https://chatgpt.com/c/good', status: 'complete'
-  }, { type: 'send-chatgpt-message', text: 'WAS-OFFLINE-TEST-MESSAGE' });
-  return { ...observed, reply_ok: Boolean(reply && reply.ok) };
+  let reply = null;
+  let error_type = null;
+  try {
+    reply = await callContent({
+      id: 77, url: 'https://chatgpt.com/c/good', status: 'complete'
+    }, { type: 'send-chatgpt-message', text: 'WAS-OFFLINE-TEST-MESSAGE' });
+  } catch (err) {
+    // A fail-closed UNKNOWN/HELD outcome may reject after one attempted effect;
+    // that is safer than replay, and must not crash this safety oracle.
+    error_type = err && err.constructor ? err.constructor.name : 'Error';
+  }
+  return { ...observed, reply_ok: Boolean(reply && reply.ok), error_type };
 }
 
 async function run() {
