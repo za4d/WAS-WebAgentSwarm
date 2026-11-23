@@ -14,7 +14,8 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT / "src"))
+SOURCE_ROOT = Path(os.environ.get("WAS_WAVE1_SOURCE_ROOT", str(ROOT))).resolve()
+sys.path.insert(0, str(SOURCE_ROOT / "src"))
 from web_agent_swarm.state import DurableStore  # noqa: E402
 
 
