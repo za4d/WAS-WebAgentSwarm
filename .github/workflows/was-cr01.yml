@@ -2,7 +2,7 @@ name: WAS CR-01 — content/background physical Send offline
 
 on:
   push:
-    branches: [fix/cr01-content-background-20261123, fix/cr01-durable-receipts-20261123]
+    branches: [fix/cr01-content-background-20261123, fix/cr01-durable-receipts-20261123, fix/cr01-audit-boundaries-20261123]
     paths:
       - 'browser-extension/**'
       - 'tests/relay-evaluation/**'
