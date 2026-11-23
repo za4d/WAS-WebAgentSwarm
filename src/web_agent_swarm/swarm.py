@@ -1271,40 +1271,28 @@ class SwarmRuntime:
         timeout: float = 20.0,
         command_id: str = "",
     ) -> Dict[str, object]:
-        deadline = time.time() + max(1.0, float(timeout))
+        # Retain timeout in the public signature; it must never justify a
+        # second potentially effectful /send after a lost callback. The bridge
+        # can return ok=False even when the content script has clicked Send.
         active_command_id = str(command_id or "").strip() or uuid.uuid4().hex
-        last = {
-            "ok": False,
-            "error": "send timed out",
-            "command_id": active_command_id,
-        }
-        delay = 0.25
-        attempts = 0
-        while time.time() < deadline:
-            inspected = self.bridge.inspect(tab_id, tail=1)
-            if inspected.get("ok"):
-                snapshot = inspected.get("snapshot") or {}
-                if snapshot.get("generating"):
-                    return {
-                        "ok": False,
-                        "busy": True,
-                        "stuck_generating": bool(snapshot.get("stuckGenerating")),
-                        "command_id": active_command_id,
-                        "error": "tab is generating",
-                    }
-            attempts += 1
-            last = self.bridge.send(
-                tab_id,
-                text,
-                command_id=active_command_id,
-            )
-            last["command_id"] = active_command_id
-            last["attempts"] = attempts
-            if last.get("ok"):
-                return last
-            time.sleep(delay)
-            delay = min(delay * 2.0, 2.0)
-        return last
+        inspected = self.bridge.inspect(tab_id, tail=1)
+        if inspected.get("ok"):
+            snapshot = inspected.get("snapshot") or {}
+            if snapshot.get("generating"):
+                return {
+                    "ok": False,
+                    "busy": True,
+                    "stuck_generating": bool(snapshot.get("stuckGenerating")),
+                    "command_id": active_command_id,
+                    "error": "tab is generating",
+                }
+        # Exactly one outbound bridge call per permitted runtime invocation.
+        # A retry, including one reusing command_id, requires external proof
+        # that the prior invocation had no physical Send effect.
+        result = self.bridge.send(tab_id, text, command_id=active_command_id)
+        result["command_id"] = active_command_id
+        result["attempts"] = 1
+        return result
 
     def _wait_conversation(self, tab_id: int, timeout: float = 20.0) -> Optional[Dict[str, object]]:
         deadline = time.time() + timeout
