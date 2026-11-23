@@ -143,7 +143,7 @@ const chrome={
   }
 };
 const workerContext={
-  chrome,URL,WebSocket:WS,globalThis:null,
+  chrome,URL,WebSocket:WS,crypto:crypto.webcrypto,TextEncoder,globalThis:null,
   setInterval,clearInterval,setTimeout,clearTimeout
 };
 workerContext.globalThis=workerContext;
