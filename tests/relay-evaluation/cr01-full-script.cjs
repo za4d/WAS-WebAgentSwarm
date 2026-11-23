@@ -268,7 +268,7 @@ async function run(){
     const r=await f.call(f.handler);
     assert.equal(r.ok,false);
     assert.equal(f.state.clicks,0);
-    assert.equal(f.state.draft,TEXT+' ');
+    assert.equal(f.state.draft,TEXT+' ','Owner edit after staging must be preserved');
   });
   await testcase('C04 attachment-only draft blocks Send',async()=>{
     const f=contentFixture({attachment:true});
@@ -285,10 +285,11 @@ async function run(){
     const r=await f.call(f.handler);
     assert.equal(r.ok,false);assert.equal(f.state.clicks,0);
   });
-  await testcase('C07 disabled Send button never clicked',async()=>{
+  await testcase('C07 disabled Send button restores owned staged text',async()=>{
     const f=contentFixture({disabled:true});
     const r=await f.call(f.handler);
     assert.equal(r.ok,false);assert.equal(f.state.clicks,0);
+    assert.equal(f.state.draft,'','Pre-click failure must not strand an unowned prompt');
   });
   await testcase('C08 repeated command is consumed even after ACK',async()=>{
     const f=contentFixture();
