@@ -37,6 +37,8 @@ $report=[ordered]@{
   worker_process_probe_executed=$false
   worker_process_vm_read_opened=$null
   worker_process_probe_error=$null
+  process_dacl_applied_after_launch=$false
+  process_dacl_applied_before_key_load=$false
   service_survived_worker_probe=$false
   verdict='INCONCLUSIVE'
   error_class=$null
@@ -113,6 +115,13 @@ try {
   $report.trusted_identity_nonadmin=($owner.User -ieq $trustedName)
   $report.actual_bridge_process_running=($nodePid -gt 0 -and $report.trusted_identity_nonadmin)
   if(-not $report.actual_bridge_process_running){throw 'wrong_service_process_owner'}
+
+  # Controlled comparison against earlier *unmodified* process DACL failure
+  # at run #45277583179. This modifies only the ephemeral CI process,
+  # AFTER its startup. It is NOT an acceptable production launch sequence.
+  & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'cr01-rb01-process-dacl-ci.ps1') -TargetPid $nodePid -TrustedSid $trustedSid | Out-Null
+  if($LASTEXITCODE -ne 0){throw 'explicit_process_dacl_failed'}
+  $report.process_dacl_applied_after_launch=$true
 
   $workerResult=Join-Path $worker 'worker-result.json'
   $args=@('-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',
