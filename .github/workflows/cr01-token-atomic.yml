@@ -1,0 +1,51 @@
+name: CR01 — authentication-token atomic-file safety oracle
+
+on:
+  push:
+    branches: [fix/cr01-codeql-token-atomic-20261123]
+    paths:
+      - 'bridge/server.js'
+      - 'tests/relay-evaluation/cr01-token-atomic.cjs'
+      - '.github/workflows/cr01-token-atomic.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  token-file:
+    name: Bridge token TOCTOU regression (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Execute source-derived token fault and restart cases
+        shell: bash
+        run: |
+          set +e
+          node tests/relay-evaluation/cr01-token-atomic.cjs > "$RUNNER_TEMP/token-oracle.json" 2> "$RUNNER_TEMP/token-oracle.err"
+          code=$?
+          set -e
+          cat "$RUNNER_TEMP/token-oracle.json"
+          cat "$RUNNER_TEMP/token-oracle.err" >&2
+          printf 'source_head=%s\nexit=%s\n' "$GITHUB_SHA" "$code" > "$RUNNER_TEMP/token-oracle-receipt.txt"
+          exit "$code"
+      - name: Preserve exact fault oracle results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cr01-token-${{ matrix.os }}-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/token-oracle.json
+            ${{ runner.temp }}/token-oracle.err
+            ${{ runner.temp }}/token-oracle-receipt.txt
+          retention-days: 30
