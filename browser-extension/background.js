@@ -2,6 +2,7 @@ const DEFAULT_WS = 'ws://127.0.0.1:8788/ws';
 const PROTOCOL_MIN = 5;
 const PROTOCOL_MAX = 5;
 const COMMAND_CACHE_KEY = 'wasCommandResultsV1';
+const COMMAND_RECEIPT_PREFIX = 'wasCommandReceiptV2:';
 const RECONNECT_ALARM = 'was-cr01-bridge-reconnect';
 
 let socket = null;
@@ -13,7 +14,6 @@ let commandCacheReady = false;
 const commandResults = new Map();
 const commandInflight = new Map();
 const knownChatTabs = new Map();
-const MAX_COMMAND_CACHE = 256;
 
 function validPinnedChatUrl(raw) {
   try {
@@ -92,54 +92,72 @@ async function reviveDiscardedChatTab(tab) {
   }
 }
 
-async function persistCommandResults() {
-  const entries = [];
-  for (const [commandId, result] of commandResults.entries()) {
-    entries.push({ commandId, result, recordedAt: Date.now() / 1000 });
-  }
-  await chrome.storage.local.set({ [COMMAND_CACHE_KEY]: entries.slice(-MAX_COMMAND_CACHE) });
-}
-
+// Each command has a *separate* durable storage key. The earlier shared
+// 256-entry array was a read-modify-write snapshot: overlapping async
+// chrome.storage.local.set calls could finish out of order and discard a
+// different command's previously acknowledged pre-effect reservation.
 async function hydrateCommandResults() {
   commandCacheReady = false;
+  commandResults.clear();
   try {
-    const stored = await chrome.storage.local.get([COMMAND_CACHE_KEY]);
-    const raw = stored[COMMAND_CACHE_KEY];
-    if (raw !== undefined && !Array.isArray(raw)) {
-      throw new Error('Command cache has an unexpected shape.');
+    const stored = await chrome.storage.local.get(null);
+    if (!stored || typeof stored !== 'object' || Array.isArray(stored)) {
+      throw new Error('Command history storage is not an object.');
     }
-    const entries = raw || [];
-    for (const entry of entries.slice(-MAX_COMMAND_CACHE)) {
-      const commandId = String(entry?.commandId || '').trim();
+    // Preserve older receipts for migration. Do not truncate or silently
+    // rewrite the legacy snapshot: its limited retention remains a historical
+    // risk and is NOT equivalent to an authoritative Replay/Relay journal.
+    const old = stored[COMMAND_CACHE_KEY];
+    if (old !== undefined && !Array.isArray(old)) {
+      throw new Error('Legacy command cache has an invalid shape.');
+    }
+    for (const record of old || []) {
+      const commandId = String(record?.commandId || '').trim();
       if (!/^[A-Za-z0-9_-]{1,128}$/.test(commandId) ||
-          !entry?.result || typeof entry.result !== 'object' ||
-          Array.isArray(entry.result)) {
-        throw new Error('Command cache includes an invalid receipt.');
+          !record?.result || typeof record.result !== 'object' ||
+          Array.isArray(record.result)) {
+        throw new Error('Legacy command history has a malformed receipt.');
       }
-      commandResults.set(commandId, entry.result);
+      commandResults.set(commandId, record.result);
+    }
+    // V2 keys are written independently, so a late unrelated write cannot
+    // drop a separate command. Prefer V2 to legacy on any ID collision.
+    for (const [key, record] of Object.entries(stored)) {
+      if (!key.startsWith(COMMAND_RECEIPT_PREFIX)) continue;
+      const commandId = key.slice(COMMAND_RECEIPT_PREFIX.length);
+      if (!/^[A-Za-z0-9_-]{1,128}$/.test(commandId) ||
+          record?.commandId !== commandId ||
+          !record?.result || typeof record.result !== 'object' ||
+          Array.isArray(record.result)) {
+        throw new Error('Durable command receipt has an invalid identity.');
+      }
+      commandResults.set(commandId, record.result);
     }
     commandCacheReady = true;
   } catch {
-    // A fresh in-memory Map is NOT proof that the previous worker performed
-    // no Send. Keep the extension connected for read-only inspection, but
-    // block every physical Send until durable state can be recovered.
+    // Never translate unreadable/incomplete historical command storage into
+    // "no previous Send". Disable effects until an owner can recover it.
     commandResults.clear();
     commandCacheReady = false;
   }
 }
 
 async function rememberCommand(commandId, result, required = false) {
-  if (!commandId) throw new Error('Cannot persist an unnamed Send command.');
-  commandResults.set(commandId, { ...result, commandId });
-  while (commandResults.size > MAX_COMMAND_CACHE) {
-    const oldest = commandResults.keys().next().value;
-    commandResults.delete(oldest);
+  if (!/^[A-Za-z0-9_-]{1,128}$/.test(String(commandId || ''))) {
+    throw new Error('Cannot persist an unnamed or malformed Send command.');
   }
+  const receipt = { ...result, commandId };
+  commandResults.set(commandId, receipt);
   try {
-    await persistCommandResults();
+    await chrome.storage.local.set({
+      [COMMAND_RECEIPT_PREFIX + commandId]: {
+        commandId, result: receipt, recordedAt: Date.now() / 1000
+      }
+    });
   } catch (error) {
-    // A pre-effect reservation MUST be durable. Failing to persist it
-    // means there is no permission to cross the physical Send boundary.
+    // The *first* pre-effect receipt must commit before any physical effect.
+    // A full/quota-denied local store blocks future Sends rather than evicting
+    // old uncertain receipts. Never prune records without external proof.
     if (required) throw error;
   }
 }
