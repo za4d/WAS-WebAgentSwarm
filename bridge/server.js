@@ -19,6 +19,19 @@ const pending = new Map();
 const browserEvents = [];
 const eventWaiters = new Set();
 const MAX_BROWSER_EVENTS = 512;
+function validPinnedChatUrl(raw) {
+  try {
+    const parsed = new URL(raw);
+    return parsed.origin === 'https://chatgpt.com'
+      && !parsed.search && !parsed.hash
+      && (parsed.pathname === '/'
+        || /^\/c\/[^/]+\/?$/.test(parsed.pathname)
+        || /^\/g\/[^/]+(?:\/c\/[^/]+)?\/?$/.test(parsed.pathname));
+  } catch {
+    return false;
+  }
+}
+
 let browserEventSeq = 0;
 
 function loadBridgeToken() {
@@ -307,9 +320,21 @@ const server = http.createServer((req, res) => {
       const text = String(data.text || '').trim();
       if (!text) return json(res, 400, { ok: false, error: 'text is required.' });
       const tabId = Number.isInteger(data.tabId) ? data.tabId : undefined;
-      const commandId = String(data.commandId || '').trim().slice(0, 128);
+      const commandId = String(data.commandId || '').trim();
+      const expectedUrl = String(data.expectedUrl || '').trim();
+      if (!Number.isInteger(tabId) || tabId <= 0) {
+        return json(res, 400, { ok: false, error: 'Explicit target tabId is required.' });
+      }
+      if (!/^[A-Za-z0-9_-]{1,128}$/.test(commandId)) {
+        return json(res, 400, { ok: false, error: 'Valid unique commandId is required.' });
+      }
+      if (!validPinnedChatUrl(expectedUrl)) {
+        return json(res, 400, { ok: false, error: 'Pinned ChatGPT target URL is required.' });
+      }
       awaitResult(id, 'send-result', res, 12000);
-      sendToCurrentProfile(JSON.stringify({ type: 'send', id, tabId, text, commandId }));
+      sendToCurrentProfile(JSON.stringify({
+        type: 'send', id, tabId, text, commandId, expectedUrl
+      }));
     });
     return;
   }
