@@ -39,7 +39,8 @@ const storageMap = () => {
 
 function contentFixture({
   url=GOOD, draft='', attachment=false, disabled=false,
-  storage=storageMap(), navigateOnInput=false, storageDenied=false
+  storage=storageMap(), navigateOnInput=false, mutateOnInput=false,
+  storageDenied=false
 }={}) {
   const state = { clicks:0, draft, inputEvents:0, location:{href:url}, listeners:[] };
   const editor = {
@@ -54,6 +55,7 @@ function contentFixture({
       if(evt.type==='input'){
         state.inputEvents++;
         if(navigateOnInput) state.location.href = WRONG;
+        if(mutateOnInput) state.draft=TEXT+' ';
       }
     }
   };
@@ -236,6 +238,20 @@ async function run(){
     const r=await f.call(f.handler);
     assert.equal(r.ok,false);assert.equal(f.state.clicks,0);
     assert.equal(f.state.draft,'OWNER DRAFT');
+  });
+  await testcase('C03B whitespace-only owner draft survives exactly',async()=>{
+    const f=contentFixture({draft:' \n\t '});
+    const r=await f.call(f.handler);
+    assert.equal(r.ok,false);
+    assert.equal(f.state.clicks,0);
+    assert.equal(f.state.draft,' \n\t ');
+  });
+  await testcase('C03C editor mutation after staging refuses click',async()=>{
+    const f=contentFixture({mutateOnInput:true});
+    const r=await f.call(f.handler);
+    assert.equal(r.ok,false);
+    assert.equal(f.state.clicks,0);
+    assert.equal(f.state.draft,TEXT+' ');
   });
   await testcase('C04 attachment-only draft blocks Send',async()=>{
     const f=contentFixture({attachment:true});
