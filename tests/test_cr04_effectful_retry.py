@@ -29,7 +29,7 @@ class ControlledBridge:
     def inspect(self, tab_id, tail=1):
         return {"ok": True, "snapshot": {"generating": self.generating}}
 
-    def send(self, tab_id, text, command_id=""):
+    def send(self, tab_id, text, command_id="", expected_url=""):
         self.calls.append((tab_id, text, command_id))
         if len(self.calls) > 1:
             # A once-unknown effect cannot be safely retried by this API.
