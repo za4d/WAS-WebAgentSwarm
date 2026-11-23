@@ -52,6 +52,15 @@ class BridgeClientTest(unittest.TestCase):
             timeout=14.0,
         )
 
+    def test_send_preserves_exact_message_text_bytes(self):
+        # Relay hashes the original payload before issuing a Send permit.
+        # Transport must not silently strip semantically significant text.
+        original = "  line 1\\n    indented line 2\\n "
+        client = BridgeClient("http://example.invalid")
+        with mock.patch.object(client, "_json", return_value={"ok": True}) as call:
+            client.send(7, original, command_id="cmd-preserve", expected_url="https://chatgpt.com/c/same")
+        self.assertEqual(call.call_args.kwargs["payload"]["text"], original)
+
     def test_send_requires_original_target_and_command_id(self):
         client = BridgeClient("http://example.invalid")
         with mock.patch.object(client, "_json") as bridge_call:
