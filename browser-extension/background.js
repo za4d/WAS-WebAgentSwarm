@@ -9,6 +9,7 @@ let reconnectTimer = null;
 let keepAliveTimer = null;
 let connectInFlight = false;
 let bridgeHandshakeOk = false;
+let commandCacheReady = false;
 const commandResults = new Map();
 const commandInflight = new Map();
 const knownChatTabs = new Map();
@@ -100,15 +101,31 @@ async function persistCommandResults() {
 }
 
 async function hydrateCommandResults() {
+  commandCacheReady = false;
   try {
     const stored = await chrome.storage.local.get([COMMAND_CACHE_KEY]);
-    const entries = Array.isArray(stored[COMMAND_CACHE_KEY]) ? stored[COMMAND_CACHE_KEY] : [];
+    const raw = stored[COMMAND_CACHE_KEY];
+    if (raw !== undefined && !Array.isArray(raw)) {
+      throw new Error('Command cache has an unexpected shape.');
+    }
+    const entries = raw || [];
     for (const entry of entries.slice(-MAX_COMMAND_CACHE)) {
       const commandId = String(entry?.commandId || '').trim();
-      if (!commandId || !entry?.result || typeof entry.result !== 'object') continue;
+      if (!/^[A-Za-z0-9_-]{1,128}$/.test(commandId) ||
+          !entry?.result || typeof entry.result !== 'object' ||
+          Array.isArray(entry.result)) {
+        throw new Error('Command cache includes an invalid receipt.');
+      }
       commandResults.set(commandId, entry.result);
     }
-  } catch {}
+    commandCacheReady = true;
+  } catch {
+    // A fresh in-memory Map is NOT proof that the previous worker performed
+    // no Send. Keep the extension connected for read-only inspection, but
+    // block every physical Send until durable state can be recovered.
+    commandResults.clear();
+    commandCacheReady = false;
+  }
 }
 
 async function rememberCommand(commandId, result, required = false) {
@@ -372,6 +389,14 @@ async function runReservedSend(payload, commandId) {
 
 async function send(payload) {
   const commandId = String(payload.commandId || '').trim();
+  if (!commandCacheReady) {
+    sendSocket({
+      type: 'send-result', id: payload.id, ok: false,
+      error: 'Persisted command history unavailable; Send is disabled.',
+      mayHaveExecuted: true, status: 'UNKNOWN'
+    });
+    return;
+  }
   if (!/^[A-Za-z0-9_-]{1,128}$/.test(commandId) ||
       !Number.isInteger(payload.tabId) || payload.tabId <= 0 ||
       !validPinnedChatUrl(payload.expectedUrl)) {
@@ -414,6 +439,15 @@ async function send(payload) {
 
 async function commandStatus(payload) {
   const commandId = String(payload.commandId || '').trim();
+  if (!commandCacheReady) {
+    sendSocket({
+      type: 'command-status-result', id: payload.id,
+      ok: false, found: false, completed: false, uncertain: true,
+      commandId,
+      error: 'Persisted command history unavailable.'
+    });
+    return;
+  }
   if (commandResults.has(commandId)) {
     const result = commandResults.get(commandId);
     const unresolved = result?.phase === 'attempting';
