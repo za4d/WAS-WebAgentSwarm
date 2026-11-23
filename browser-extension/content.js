@@ -154,7 +154,9 @@
 
   function occupiedComposer(target) {
     // A text-empty composer containing attachments is NOT an empty draft.
-    if (composerText(target).replace(/[\u200b\u2060]/g, '').trim()) return true;
+    // Preserve even whitespace-only/zero-width owner input byte-for-byte.
+    // Failing closed on an unfamiliar placeholder is safer than overwriting it.
+    if (composerText(target).length > 0) return true;
     try {
       if (target.querySelector?.('img,video,canvas,button,[data-file-id],[data-testid*="attachment"]')) {
         return true;
@@ -236,7 +238,7 @@
           location.href !== expectedUrl || generating()) {
         return fail('Recipient or editor changed before final Send.');
       }
-      if (composerText(target).trim() !== cleanText.trim()) {
+      if (composerText(target) !== cleanText) {
         return fail('Composer modified by another actor; Send refused.');
       }
       if (document.querySelector(
