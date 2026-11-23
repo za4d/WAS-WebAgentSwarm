@@ -68,3 +68,17 @@ When adding fixes:
 Do not run any real browser Send, automate extraction of private conversations, grant wide MCP tools, expose the localhost bridge, install persistent services, spend API credits, deploy, merge changes into main or touch the private Relay product as part of this setup. Unknown Send result => HELD; no blind retry. Browser click ACK is never model completion proof.
 
 **Next actionable work:** independently run the new Node safety runner and preserve its full JSON + exit status; implement and independently review targeted Send fixes on an isolated fix branch; then validate WAS adapter + actual Relay journal integration. Only then pursue a substantive three-agent Web coding/test/review/correction run.
+
+
+## Executed Wave 1 — 23 November 2026 (append-only status correction)
+
+The standalone command-line test runners were **subsequently executed** on GitHub Actions. The earlier "NOT RUN" statements above describe their status when the initial report was authored, not their present status.
+
+At [source commit 2913e492f676251d0f8b7a60d6e0ca1bbfb3c7c9](https://github.com/za4d/WAS-WebAgentSwarm/commit/2913e492f676251d0f8b7a60d6e0ca1bbfb3c7c9), the [dedicated Wave 1 run](https://github.com/za4d/WAS-WebAgentSwarm/actions/runs/45195784522) produced:
+
+- \`tests/relay-evaluation/send-safety.cjs\` — Node 22 executed the **actual checkout** script and recorded **1 PASS, 4 FAIL**, exit **1**, source hashes and individual synthetic click/effect counts. This is a product **FAIL**, not an omitted test. [Raw output artifact](https://github.com/za4d/WAS-WebAgentSwarm/actions/runs/45195784522/artifacts/14827832067).
+- \`tests/test_wave1_management.py\` — Python 3.13 executed four disposable **actual DurableStore** tests, **4/4 PASS**, exit **0**: dependency persistence, resource exclusion plus disjoint-lane progress, lease retry, simultaneous competing claims. [Raw log artifact](https://github.com/za4d/WAS-WebAgentSwarm/actions/runs/45195784522/artifacts/14829075523).
+
+An initial unrelated CI release-hygiene false positive was eliminated solely by renaming a test-artifact filename in the workflow (commit \`21db5d126001a72a00e4461b05ee9344a1cd7aa7\`). The unchanged release scanner then passed. Both [standard push CI](https://github.com/za4d/WAS-WebAgentSwarm/actions/runs/45196055742) and [standard PR CI](https://github.com/za4d/WAS-WebAgentSwarm/actions/runs/45196071837) **PASSED all seven jobs**, covering the bridge and six Python OS/version combinations. The standard Python suite now runs 99 tests (95 inherited + four new) and the checked job logs report successful completion. The [separate Send-safety run](https://github.com/za4d/WAS-WebAgentSwarm/actions/runs/45196055687) remains **failing correctly**, until browser safety is fixed.
+
+**Reuse decision at this boundary:** stock WAS task/dependency/lease/resource coordination merits a focused integration study; no independent live Web worker scheduling was tested and the authoritative Relay journal is not replaced. Stock WAS browser Send safety remains a **blocking failure**. Do not merge this test-only branch as a release or start unattended browser effects.
