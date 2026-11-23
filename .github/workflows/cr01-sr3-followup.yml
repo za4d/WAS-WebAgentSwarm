@@ -1,0 +1,104 @@
+name: WAS CR-01 SR3 targeted offline corrections
+
+on:
+  push:
+    branches:
+      - fix/cr01-sr3-di01b-rb02-20261123
+    paths:
+      - 'src/web_agent_swarm/state.py'
+      - 'bridge/relay-permit.js'
+      - 'bridge/server.js'
+      - 'tests/test_cr01_sr3_di01b.py'
+      - 'tests/relay-evaluation/cr01-rb02-durability.cjs'
+      - '.github/workflows/cr01-sr3-followup.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  state-and-receipt:
+    name: Actual DurableStore and Node receipt gate (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Execute actual-state DI-01b and real-filesystem RB-02 negatives
+        shell: bash
+        run: |
+          set +e
+          PYTHONPATH=src python -m unittest discover -s tests -p 'test_cr01_sr3_di01b.py' -v > "$RUNNER_TEMP/sr3-python.log" 2>&1
+          py_exit=$?
+          node tests/relay-evaluation/cr01-rb02-durability.cjs > "$RUNNER_TEMP/sr3-node.json" 2>&1
+          node_exit=$?
+          set -e
+          cat "$RUNNER_TEMP/sr3-python.log"
+          cat "$RUNNER_TEMP/sr3-node.json"
+          printf 'source_sha=%s\npython_exit=%s\nnode_exit=%s\n' "$GITHUB_SHA" "$py_exit" "$node_exit" > "$RUNNER_TEMP/sr3-provenance.txt"
+          cat "$RUNNER_TEMP/sr3-provenance.txt"
+          test "$py_exit" -eq 0 -a "$node_exit" -eq 0
+      - name: Retain exact offline source and result evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sr3-di01b-rb02-${{ matrix.os }}-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/sr3-python.log
+            ${{ runner.temp }}/sr3-node.json
+            ${{ runner.temp }}/sr3-provenance.txt
+          if-no-files-found: warn
+          retention-days: 30
+
+  bridge-startup:
+    name: Actual Node bridge refuses missing receipt store
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install pinned bridge dependencies with no postinstall scripts
+        run: npm ci --prefix bridge --ignore-scripts
+      - name: Confirm missing pre-provisioned store prevents binding
+        shell: bash
+        env:
+          WEB_SWARM_SEND_MODE: relay_required
+          WEB_SWARM_RELAY_PERMIT_KEY: synthetic-not-real-credential-sr3-aaaaaaaaaaaaaaaa
+          WEB_SWARM_BRIDGE_TOKEN: synthetic-not-a-real-bridge-token-bbbbbbbbb
+        run: |
+          mkdir -p "$RUNNER_TEMP/parent"
+          export WEB_SWARM_RELAY_RECEIPTS_DIR="$RUNNER_TEMP/parent/not-provisioned"
+          set +e
+          node bridge/server.js > "$RUNNER_TEMP/sr3-startup.log" 2>&1
+          code=$?
+          set -e
+          cat "$RUNNER_TEMP/sr3-startup.log"
+          printf 'source_sha=%s\nstartup_exit=%s\n' "$GITHUB_SHA" "$code" > "$RUNNER_TEMP/sr3-startup-receipt.txt"
+          cat "$RUNNER_TEMP/sr3-startup-receipt.txt"
+          test "$code" -ne 0
+          grep -q 'R8 bridge preflight refused' "$RUNNER_TEMP/sr3-startup.log"
+      - name: Retain service-startup negative evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sr3-strict-startup-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/sr3-startup.log
+            ${{ runner.temp }}/sr3-startup-receipt.txt
+          if-no-files-found: warn
+          retention-days: 30

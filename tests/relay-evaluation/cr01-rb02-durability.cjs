@@ -16,6 +16,7 @@ const signer='rb02-offline-private-synthetic-' .repeat(3);
 process.env.WEB_SWARM_SEND_MODE='relay_required';
 process.env.WEB_SWARM_RELAY_PERMIT_KEY=signer;
 process.env.WEB_SWARM_RELAY_RECEIPTS_DIR=path.join(tmp,'receipts');
+fs.mkdirSync(process.env.WEB_SWARM_RELAY_RECEIPTS_DIR,{recursive:true,mode:0o700}); // outside the Send effect path
 const out=[];
 function test(label,fn) {
   try{fn();out.push({label,verdict:'PASS'});}
@@ -34,7 +35,7 @@ function request(id){
 }
 (async()=>{
  const moduleUrl=pathToFileURL(path.resolve(__dirname,'../../bridge/relay-permit.js')).href;
- const {verifyRelayPermit,consumeRelayPermit}=await import(moduleUrl);
+ const {verifyRelayPermit,consumeRelayPermit,checkRelayReceiptStore}=await import(moduleUrl);
  const originalFsync=fs.fsyncSync;
  try{
   test('RB02-1 actual receipt file explicitly flushed before successful admission',()=>{
@@ -64,6 +65,32 @@ function request(id){
    assert.equal(result.ok,false,'Flush failure must not authorise effect');
    assert.equal(consumeRelayPermit(v).ok,false,'Incomplete receipt must still deny replay');
   });
+  test('RB02-3 missing receipt directory fails closed and is never created by Send',()=>{
+   fs.rmSync(process.env.WEB_SWARM_RELAY_RECEIPTS_DIR,{recursive:true,force:true});
+   const v=verifyRelayPermit(request('c'.repeat(32)));
+   assert.equal(v.ok,true);
+   assert.equal(checkRelayReceiptStore().ok,false);
+   assert.equal(consumeRelayPermit(v).ok,false);
+   assert.equal(fs.existsSync(process.env.WEB_SWARM_RELAY_RECEIPTS_DIR),false);
+   fs.mkdirSync(process.env.WEB_SWARM_RELAY_RECEIPTS_DIR,{mode:0o700});
+  });
+  test('RB02-4 pre-provisioned receipt directory and one-use claim work',()=>{
+   const v=verifyRelayPermit(request('d'.repeat(32)));
+   assert.equal(checkRelayReceiptStore().ok,true);
+   assert.equal(consumeRelayPermit(v).ok,true);
+   assert.equal(consumeRelayPermit(v).ok,false);
+  });
+  if(process.platform!=='win32') {
+   test('RB02-5 permissive POSIX directory refuses admission',()=>{
+     const dir=process.env.WEB_SWARM_RELAY_RECEIPTS_DIR;
+     fs.chmodSync(dir,0o777);
+     try {
+       const v=verifyRelayPermit(request('e'.repeat(32)));
+       assert.equal(checkRelayReceiptStore().ok,false);
+       assert.equal(consumeRelayPermit(v).ok,false);
+     } finally {fs.chmodSync(dir,0o700);}
+   });
+  }
  }finally{
   fs.fsyncSync=originalFsync;
   fs.rmSync(tmp,{force:true,recursive:true});

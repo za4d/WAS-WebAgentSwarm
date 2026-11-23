@@ -422,9 +422,21 @@ class DurableStore:
                     if old not in (None, "", 0) and offered not in ("", 0) and old != offered:
                         raise ValueError("immutable R8 Send diagnostic target mismatch: " + field)
                 old_status = str(previous.get("status") or "")
+                # SR3 DI-01b: after a prior may-have-executed observation,
+                # a diagnostic-only re-entry cannot claim definite failure,
+                # busy/pre-effect refusal, or authenticated success. Leave
+                # uncertainty intact; Relay R8 remains the effect authority.
+                if (old_status == "attempting" and previous.get("may_have_executed")
+                        and clean_status in {"ok", "failed", "busy"}):
+                    raise ValueError("uncertain R8 Send diagnostic cannot become definite")
                 if old_status and old_status != "attempting" and clean_status != old_status:
                     raise ValueError("regressive terminal R8 Send diagnostic status")
                 old_result = previous.get("result")
+                # A terminal receipt with a null result is *also* immutable:
+                # late callbacks belong in separate append-only incident data.
+                if (old_status and old_status != "attempting"
+                        and isinstance(result, dict) and result != old_result):
+                    raise ValueError("immutable terminal R8 Send diagnostic result")
                 if (old_result is not None and isinstance(result, dict)
                         and result != old_result):
                     raise ValueError("immutable terminal R8 Send diagnostic result")
