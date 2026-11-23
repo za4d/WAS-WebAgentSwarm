@@ -42,7 +42,7 @@ class FakeBridge:
             },
         }
 
-    def send(self, tab_id, text, command_id=""):
+    def send(self, tab_id, text, command_id="", expected_url=""):
         self.sent.append((tab_id, text))
         for idx, tab in enumerate(self.tabs_data):
             if tab["id"] == tab_id and "/c/" not in tab["url"]:
