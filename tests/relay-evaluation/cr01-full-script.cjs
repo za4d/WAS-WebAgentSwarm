@@ -27,6 +27,7 @@ const GOOD = 'https://chatgpt.com/c/aaaa1111';
 const WRONG = 'https://chatgpt.com/c/bbbb2222';
 const TEXT = 'WAS-CR01-SYNTHETIC-TEXT';
 const flush = async (n=25) => { for(let i=0;i<n;i++) await Promise.resolve(); };
+const settle=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 const storageMap = () => {
   const values = new Map();
   return {
@@ -360,7 +361,7 @@ async function run(){
     const first=backgroundFixture({persisted,onContent:()=>new Promise(()=>{})});
     const sock1=await first.ready();
     void first.dispatch(sock1,'r1'); // intentionally do not await unresolved effect
-    await flush(150);
+    for(let i=0;i<100 && first.state.sent!==1;i++)await settle(5);
     assert.equal(first.state.sent,1);
     assert.ok(Object.entries(persisted).some(([k,v])=>
       k.startsWith('wasCommandReceiptV2:') && v.result.phase==='attempting'));
@@ -497,7 +498,7 @@ async function run(){
     const f=backgroundFixture({persisted,holdFirstFinal:true});
     const sock=await f.ready();
     const first=f.dispatch(sock,'a','cr01_interleaved_A');
-    for(let i=0;i<120&&!f.state.firstFinalHeld;i++)await flush(2);
+    for(let i=0;i<150&&!f.state.firstFinalHeld;i++)await settle(5);
     assert.equal(f.state.firstFinalHeld,true,'Must hold A terminal write');
     const second=await f.dispatch(sock,'b','cr01_interleaved_B');
     assert.equal(second.ok,true);
