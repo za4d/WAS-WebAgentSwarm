@@ -45,6 +45,12 @@ function extractAsyncFunction(js, name) {
 
 async function testContent(js, { url, expectedUrl, initialDraft = '', navigateOnInput = false }) {
   const s = { draft: initialDraft, clicks: 0, changes: 0, handler: null };
+  const values = new Map();
+  const storage = {
+    getItem(key) { return values.get(key) ?? null; },
+    setItem(key, value) { values.set(key, String(value)); },
+    removeItem(key) { values.delete(key); }
+  };
   const location = { href: url };
   const sendButton = { disabled: false, click() { s.clicks++; } };
   const editor = {
@@ -82,15 +88,16 @@ async function testContent(js, { url, expectedUrl, initialDraft = '', navigateOn
   new Function(
     'chrome', 'document', 'location', 'globalThis',
     'HTMLTextAreaElement', 'HTMLInputElement', 'InputEvent',
-    'Event', 'setTimeout', js
+    'Event', 'setTimeout', 'sessionStorage', js
   )(chrome, document, location, {}, TestTextArea, TestInput,
-    TestEvent, TestEvent, callback => callback());
+    TestEvent, TestEvent, callback => callback(), storage);
   assert.equal(typeof s.handler, 'function', 'Missing content-script listener');
   const reply = await new Promise((resolve, reject) => {
     try {
       s.handler({
         type: 'send-chatgpt-message',
         text: 'WAS-OFFLINE-TEST-MESSAGE',
+        commandId: 'WAS_CR01_SYNTHETIC_01',
         expectedUrl
       }, {}, resolve);
     } catch (err) { reject(err); }
