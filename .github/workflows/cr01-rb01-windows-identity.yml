@@ -1,0 +1,43 @@
+name: WAS CR-01 RB-01 disposable Windows identity boundary
+
+on:
+  push:
+    branches:
+      - test/cr01-rb01-windows-identity-20261123
+    paths:
+      - 'tests/relay-evaluation/cr01-rb01-*.ps1'
+      - '.github/workflows/cr01-rb01-windows-identity.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-account-acl-canary:
+    runs-on: windows-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Run disposable standard-user access-control test
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $result = Join-Path $env:RUNNER_TEMP 'rb01-windows-identity-result.json'
+          & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File 'tests/relay-evaluation/cr01-rb01-windows-identity.ps1' -EvidencePath $result
+          $exit = $LASTEXITCODE
+          if (Test-Path -LiteralPath $result) { Get-Content -LiteralPath $result }
+          "source_revision=$env:GITHUB_SHA" | Out-File -FilePath (Join-Path $env:RUNNER_TEMP 'rb01-receipt.txt') -Encoding ascii
+          "script_exit=$exit" | Out-File -FilePath (Join-Path $env:RUNNER_TEMP 'rb01-receipt.txt') -Append -Encoding ascii
+          exit $exit
+      - name: Save synthetic Windows token and ACL test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cr01-rb01-disposable-windows-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/rb01-windows-identity-result.json
+            ${{ runner.temp }}/rb01-receipt.txt
+          if-no-files-found: warn
+          retention-days: 30
