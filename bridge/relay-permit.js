@@ -75,9 +75,28 @@ export function consumeRelayPermit(verified) {
     const file=path.join(RECEIPTS,p.attemptId+'.json');
     // Last effectful admission point: durable and exclusive before WebSocket
     // dispatch. A crash after creation sacrifices liveness, never retries.
-    fs.writeFileSync(file,JSON.stringify({
+    const record=Buffer.from(JSON.stringify({
       v:1,attemptId:p.attemptId,signature:p.signature,consumedAt:Date.now()
-    })+'\n',{encoding:'utf8',mode:0o600,flag:'wx'});
+    })+'\n','utf8');
+    // Exclusive creation protects against parallel processes. It does NOT
+    // imply stable storage: explicitly flush before browser dispatch.
+    // Any write/flush/close error leaves an unusable, deny-only attempt ID.
+    const fd=fs.openSync(file,'wx',0o600);
+    try {
+      const written=fs.writeSync(fd,record,0,record.length,0);
+      if(written!==record.length)throw new Error('Incomplete R8 permit receipt write');
+      fs.fsyncSync(fd);
+    } finally {
+      fs.closeSync(fd);
+    }
+    // POSIX filesystems generally need a directory fsync to persist a new
+    // filename. Node cannot portably flush directory handles on Windows.
+    // Windows therefore has a file flush, not proven power-loss durability:
+    // the Windows release gate must remain HOLD until OS-specific validation.
+    if(process.platform!=='win32') {
+      const dirFd=fs.openSync(RECEIPTS,fs.constants.O_RDONLY);
+      try {fs.fsyncSync(dirFd);}finally{fs.closeSync(dirFd);}
+    }
     return {ok:true,mode:'relay_required'};
   } catch(e) {
     return {ok:false,error:e?.code==='EEXIST'
