@@ -73,8 +73,8 @@ jobs:
           code=$?
           set -e
           cat "$RUNNER_TEMP/task-management.log"
-          printf 'source_revision=%s\npython_test_exit=%s\n' "$GITHUB_SHA" "$code" > "$RUNNER_TEMP/task-management-provenance.txt"
-          cat "$RUNNER_TEMP/task-management-provenance.txt"
+          printf 'source_revision=%s\npython_test_exit=%s\n' "$GITHUB_SHA" "$code" > "$RUNNER_TEMP/coordination-provenance.txt"
+          cat "$RUNNER_TEMP/coordination-provenance.txt"
           exit "$code"
       - name: Preserve original task test output
         if: always()
@@ -83,6 +83,6 @@ jobs:
           name: wave1-task-management-${{ github.sha }}
           path: |
             ${{ runner.temp }}/task-management.log
-            ${{ runner.temp }}/task-management-provenance.txt
+            ${{ runner.temp }}/coordination-provenance.txt
           if-no-files-found: warn
           retention-days: 30
