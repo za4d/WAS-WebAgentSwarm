@@ -86,3 +86,42 @@ jobs:
             ${{ runner.temp }}/coordination-provenance.txt
           if-no-files-found: warn
           retention-days: 30
+
+  aged-live-lock:
+    name: Live-writer lock after stale timestamp (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Run actual store's isolated stale-lock fault
+        shell: bash
+        run: |
+          set +e
+          python tests/relay-evaluation/lock-age-fault.py > "$RUNNER_TEMP/lock-fault.json" 2> "$RUNNER_TEMP/lock-fault.stderr"
+          code=$?
+          set -e
+          cat "$RUNNER_TEMP/lock-fault.json"
+          cat "$RUNNER_TEMP/lock-fault.stderr" >&2
+          printf 'source_revision=%s\npython_runner_exit=%s\n' "$GITHUB_SHA" "$code" > "$RUNNER_TEMP/lock-fault-provenance.txt"
+          cat "$RUNNER_TEMP/lock-fault-provenance.txt"
+          exit "$code"
+      - name: Preserve negative-case proof
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wave1-lock-fault-${{ matrix.os }}-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/lock-fault.json
+            ${{ runner.temp }}/lock-fault.stderr
+            ${{ runner.temp }}/lock-fault-provenance.txt
+          if-no-files-found: warn
+          retention-days: 30
