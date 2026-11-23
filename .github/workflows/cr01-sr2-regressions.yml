@@ -1,0 +1,65 @@
+name: CR-01 Reviewer S follow-up DI-01 and RB-02 (offline)
+on:
+  push:
+    branches: [fix/cr01-sr2-di01-rb02-20261123]
+    paths:
+      - 'src/web_agent_swarm/state.py'
+      - 'bridge/relay-permit.js'
+      - 'tests/test_state.py'
+      - 'tests/relay-evaluation/cr01-rb02-durability.cjs'
+      - '.github/workflows/cr01-sr2-regressions.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  reviewer-regressions:
+    name: DI-01 and RB-02 executable negatives (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Run actual DurableStore DI-01 unit tests
+        shell: bash
+        run: |
+          export PYTHONPATH=src
+          set +e
+          python -m unittest discover -s tests -p test_state.py -v > "$RUNNER_TEMP/di01.log" 2>&1
+          ret=$?
+          set -e
+          cat "$RUNNER_TEMP/di01.log"
+          echo "di01_exit=$ret" >> "$RUNNER_TEMP/sr2-receipt.txt"
+          exit "$ret"
+      - name: Run actual Node R8 receipt flush fault injection
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          node tests/relay-evaluation/cr01-rb02-durability.cjs > "$RUNNER_TEMP/rb02.json" 2> "$RUNNER_TEMP/rb02.err"
+          ret=$?
+          set -e
+          cat "$RUNNER_TEMP/rb02.json"
+          cat "$RUNNER_TEMP/rb02.err" >&2
+          echo "rb02_exit=$ret" >> "$RUNNER_TEMP/sr2-receipt.txt"
+          exit "$ret"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sr2-offline-${{ matrix.os }}-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/di01.log
+            ${{ runner.temp }}/rb02.json
+            ${{ runner.temp }}/rb02.err
+            ${{ runner.temp }}/sr2-receipt.txt
+          retention-days: 30
