@@ -1,0 +1,88 @@
+name: WAS Relay Wave 1 - offline checks
+
+on:
+  push:
+    branches:
+      - integration/relay-safety-20261123
+    paths:
+      - 'tests/relay-evaluation/**'
+      - 'tests/test_wave1_management.py'
+      - 'browser-extension/**'
+      - 'src/web_agent_swarm/**'
+      - '.github/workflows/relay-wave1.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  send-safety:
+    name: Browser Send safety (expected red at baseline)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Run actual checkout Send regression runner
+        shell: bash
+        run: |
+          set +e
+          node tests/relay-evaluation/send-safety.cjs > "$RUNNER_TEMP/send-safety.json" 2> "$RUNNER_TEMP/send-safety.stderr"
+          code=$?
+          set -e
+          cat "$RUNNER_TEMP/send-safety.json"
+          cat "$RUNNER_TEMP/send-safety.stderr" >&2
+          printf 'source_revision=%s\nnode_runner_exit=%s\n' "$GITHUB_SHA" "$code" > "$RUNNER_TEMP/send-safety-provenance.txt"
+          cat "$RUNNER_TEMP/send-safety-provenance.txt"
+          # A known-red baseline is a PRODUCT FAILURE, so preserve failing status.
+          exit "$code"
+      - name: Preserve original test evidence even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wave1-send-safety-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/send-safety.json
+            ${{ runner.temp }}/send-safety.stderr
+            ${{ runner.temp }}/send-safety-provenance.txt
+          if-no-files-found: warn
+          retention-days: 30
+
+  task-management:
+    name: Real WAS DurableStore management contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Run isolated task dependency, lease and competing-writer checks
+        shell: bash
+        env:
+          PYTHONPATH: src
+        run: |
+          set +e
+          python -m unittest discover -s tests -p 'test_wave1_management.py' -v > "$RUNNER_TEMP/task-management.log" 2>&1
+          code=$?
+          set -e
+          cat "$RUNNER_TEMP/task-management.log"
+          printf 'source_revision=%s\npython_test_exit=%s\n' "$GITHUB_SHA" "$code" > "$RUNNER_TEMP/task-management-provenance.txt"
+          cat "$RUNNER_TEMP/task-management-provenance.txt"
+          exit "$code"
+      - name: Preserve original task test output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wave1-task-management-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/task-management.log
+            ${{ runner.temp }}/task-management-provenance.txt
+          if-no-files-found: warn
+          retention-days: 30
