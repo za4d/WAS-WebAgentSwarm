@@ -107,8 +107,8 @@ function callbackRegistry(){
 }
 
 function backgroundFixture({
-  persisted={}, onContent=null, rejectWrite=false, delayTab=false,
-  tabUrl=GOOD
+  persisted={}, onContent=null, rejectWrite=false, rejectRead=false,
+  delayTab=false, tabUrl=GOOD
 }={}){
   const messages=[];
   const sockets=[];
@@ -157,6 +157,9 @@ function backgroundFixture({
       onChanged:callbackRegistry(),
       local:{
         async get(keys) {
+          if(rejectRead && (keys||[]).includes('wasCommandResultsV1')) {
+            throw Error('Synthetic persisted receipt read denied');
+          }
           const output={bridgeToken:'x'.repeat(32)};
           for(const k of keys || [])if(Object.prototype.hasOwnProperty.call(persisted,k))output[k]=persisted[k];
           return output;
@@ -424,6 +427,37 @@ async function run(){
     const result=await f.call(f.handler,'cr01_home_boot','https://chatgpt.com/');
     assert.equal(result.ok,true);
     assert.equal(f.state.clicks,1);
+  });
+  await testcase('B11 storage history read denial blocks Send even after reconnect',async()=>{
+    const f=backgroundFixture({rejectRead:true});
+    const sock=await f.ready();
+    const r=await f.dispatch(sock,'r1');
+    assert.equal(r.ok,false);
+    assert.equal(r.mayHaveExecuted,true);
+    assert.equal(f.state.sent,0);
+    const status=await f.status(sock,'st1','cr01_bg_cmd_1');
+    assert.equal(status.uncertain,true);
+  });
+  await testcase('B12 corrupt durable command history blocks all Send attempts',async()=>{
+    const f=backgroundFixture({persisted:{wasCommandResultsV1:[{
+      commandId:'abc',result:null,recordedAt:0
+    }]}});
+    const sock=await f.ready();
+    const r=await f.dispatch(sock,'r1');
+    assert.equal(r.ok,false);assert.equal(f.state.sent,0);
+  });
+  await testcase('B13 two distinct concurrent commands on one document cannot both click',async()=>{
+    const content=contentFixture();
+    const f=backgroundFixture({onContent:msg=>
+      content.call(content.handler,msg.commandId,msg.expectedUrl,msg.text)
+    });
+    const sock=await f.ready();
+    const [a,b]=await Promise.all([
+      f.dispatch(sock,'r1','cr01_mixed_1'),
+      f.dispatch(sock,'r2','cr01_mixed_2')
+    ]);
+    assert.equal(content.state.clicks,1);
+    assert.equal([a.ok,b.ok].filter(Boolean).length,1);
   });
   const pass=cases.filter(c=>c.verdict==='PASS').length;
   console.log(JSON.stringify({
