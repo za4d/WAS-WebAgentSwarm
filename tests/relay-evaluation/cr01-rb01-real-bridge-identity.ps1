@@ -34,6 +34,9 @@ $report=[ordered]@{
   worker_bridge_http_unauthorized=$false
   worker_unsigned_send_unauthorized=$false
   worker_process_memory_read_denied=$false
+  worker_process_probe_executed=$false
+  worker_process_vm_read_opened=$null
+  worker_process_probe_error=$null
   service_survived_worker_probe=$false
   verdict='INCONCLUSIVE'
   error_class=$null
@@ -128,6 +131,9 @@ try {
   $report.worker_browser_profile_canary_list_denied=-not [bool]$p.private_browser_profile_list
   $report.worker_bridge_http_unauthorized=($p.unsigned_health_http_status -eq 401)
   $report.worker_unsigned_send_unauthorized=($p.unsigned_send_http_status -eq 401)
+  $report.worker_process_probe_executed=[bool]$p.process_vm_read_probe_executed
+  $report.worker_process_vm_read_opened=$p.process_vm_read_opened
+  $report.worker_process_probe_error=$p.process_probe_error
   $report.worker_process_memory_read_denied=($p.process_vm_read_probe_executed -and $p.process_vm_read_opened -eq $false)
 
   $after=Invoke-WebRequest -Uri ($url+'/health') -UseBasicParsing -Headers @{'x-was-token'=$configuration.bridge_token} -TimeoutSec 5 -ErrorAction Stop
