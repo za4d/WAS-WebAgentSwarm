@@ -82,3 +82,17 @@ At [source commit 2913e492f676251d0f8b7a60d6e0ca1bbfb3c7c9](https://github.com/z
 An initial unrelated CI release-hygiene false positive was eliminated solely by renaming a test-artifact filename in the workflow (commit \`21db5d126001a72a00e4461b05ee9344a1cd7aa7\`). The unchanged release scanner then passed. Both [standard push CI](https://github.com/za4d/WAS-WebAgentSwarm/actions/runs/45196055742) and [standard PR CI](https://github.com/za4d/WAS-WebAgentSwarm/actions/runs/45196071837) **PASSED all seven jobs**, covering the bridge and six Python OS/version combinations. The standard Python suite now runs 99 tests (95 inherited + four new) and the checked job logs report successful completion. The [separate Send-safety run](https://github.com/za4d/WAS-WebAgentSwarm/actions/runs/45196055687) remains **failing correctly**, until browser safety is fixed.
 
 **Reuse decision at this boundary:** stock WAS task/dependency/lease/resource coordination merits a focused integration study; no independent live Web worker scheduling was tested and the authoritative Relay journal is not replaced. Stock WAS browser Send safety remains a **blocking failure**. Do not merge this test-only branch as a release or start unattended browser effects.
+
+
+## Cross-platform lock comparison — 23 November 2026
+
+**Separate deep-dive [GitHub Actions run #45197434848](https://github.com/za4d/WAS-WebAgentSwarm/actions/runs/45197434848)**, harness source SHA \`62b205ad39af5931e77892ea52590d2735a16792\`. The new reusable \`tests/relay-evaluation/lock-age-fault.py\` preserves an open local store writer lock, artificially ages the file by 40 seconds and checks whether another writer enters. The same runner was pointed at the exact public candidate revision \`MrWrecks/WAS-WebAgentSwarm@7f96d4288cbfbed4188ae0f13d8334dd81b7833a\` via a separate read-only checkout. No code merged.
+
+| Source | Ubuntu | Windows |
+|---|---|---|
+| Original WAS (unchanged source) | **FAIL** — second writer entered | PASS — contender blocked |
+| Pinned MrWrecks OS-held locking | PASS — contender blocked | PASS — contender blocked |
+
+All four subprocess results and zero/nonzero exit codes were preserved as separate GitHub Actions artefacts under that run. **This proves only the injected lock-age scenario.** It does not prove the stock Windows implementation unsafe in this case, nor the candidate fully crash-safe, nor any real ChatGPT browser behaviour. The existing successful standard Python/bridge CI remains distinct from the intentionally failing stock lock and Send-safety checks.
+
+**Implication:** treat OS-held lock acquisition from the external fork as a *focused, still-unmerged correction candidate*. Independently assess process death, multiple processes, stale files and writer recovery before merging. Current \`main\` remains the pristine original WAS baseline.
