@@ -1,0 +1,51 @@
+name: Workstream A CR01 — CodeQL token-race regression scan
+
+on:
+  push:
+    branches: [fix/cr01-codeql-token-atomic-20261123]
+    paths:
+      - '.github/workflows/cr01-codeql.yml'
+      - 'tests/relay-evaluation/cr01-codeql-summary.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  codeql:
+    name: CodeQL security-extended (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [javascript-typescript, python]
+    steps:
+      - name: Checkout pinned public WAS source
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Initialise independent static analyser
+        uses: github/codeql-action/init@v4
+        with:
+          languages: ${{ matrix.language }}
+          queries: security-extended
+      - name: Run CodeQL and retain local SARIF
+        uses: github/codeql-action/analyze@v4
+        with:
+          upload: never
+          output: codeql-results
+          category: workstream-a-cr01-${{ matrix.language }}
+      - name: Summarise actual SARIF results
+        shell: bash
+        run: python tests/relay-evaluation/cr01-codeql-summary.py "$GITHUB_SHA"
+      - name: Preserve findings and original SARIF
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cr01-codeql-${{ matrix.language }}-${{ github.sha }}
+          path: |
+            codeql-results/**
+            cr01-codeql-summary.json
+          retention-days: 30
