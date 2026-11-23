@@ -90,3 +90,46 @@ jobs:
             ${{ runner.temp }}/cr01-full.stderr
             ${{ runner.temp }}/cr01-full-receipt.txt
           retention-days: 30
+
+  actual-bridge-loopback:
+    name: Real loopback bridge, fake extension (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: bridge/package-lock.json
+      - name: Install bridge dependencies
+        working-directory: bridge
+        run: npm ci
+      - name: Test real localhost server with fake extension
+        shell: bash
+        run: |
+          set +e
+          node tests/relay-evaluation/cr01-bridge-transport.cjs > "$RUNNER_TEMP/cr01-bridge.json" 2> "$RUNNER_TEMP/cr01-bridge.stderr"
+          code=$?
+          set -e
+          cat "$RUNNER_TEMP/cr01-bridge.json"
+          cat "$RUNNER_TEMP/cr01-bridge.stderr" >&2
+          printf 'source_revision=%s\nbridge_test_exit=%s\n' "$GITHUB_SHA" "$code" > "$RUNNER_TEMP/cr01-bridge-receipt.txt"
+          cat "$RUNNER_TEMP/cr01-bridge-receipt.txt"
+          exit "$code"
+      - name: Preserve bridge HTTP and WS transport evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cr01-bridge-${{ matrix.os }}-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/cr01-bridge.json
+            ${{ runner.temp }}/cr01-bridge.stderr
+            ${{ runner.temp }}/cr01-bridge-receipt.txt
+          retention-days: 30
