@@ -138,8 +138,10 @@
     try {
       const url = new URL(raw);
       return url.origin === 'https://chatgpt.com'
-        && /\/c\/[^/?#]+\/?$/.test(url.pathname)
-        && !url.search && !url.hash;
+        && !url.search && !url.hash
+        && (url.pathname === '/'
+          || /^\/c\/[^/]+\/?$/.test(url.pathname)
+          || /^\/g\/[^/]+(?:\/c\/[^/]+)?\/?$/.test(url.pathname));
     } catch {
       return false;
     }
