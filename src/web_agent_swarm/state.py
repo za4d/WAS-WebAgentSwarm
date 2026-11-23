@@ -383,7 +383,7 @@ class DurableStore:
         if not clean:
             raise ValueError("command_id is required")
         clean_status = str(status or "attempting").strip().lower()
-        if clean_status not in {"attempting", "ok", "failed", "ack_timeout", "busy"}:
+        if clean_status not in {"attempting", "ok", "failed", "ack_timeout", "unknown", "busy"}:
             raise ValueError("unsupported send transaction status")
         with self._write_lock():
             data = self.load()
