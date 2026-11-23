@@ -4,7 +4,14 @@ import crypto from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { WebSocketServer, WebSocket } from 'ws';
-import { RELAY_SEND_MODE, verifyRelayPermit, consumeRelayPermit } from './relay-permit.js';
+import { RELAY_SEND_MODE, verifyRelayPermit, consumeRelayPermit, checkRelayReceiptStore } from './relay-permit.js';
+
+const receiptReadiness = checkRelayReceiptStore();
+if (!receiptReadiness.ok) {
+  // Strict Relay mode must never bind a bridge before its no-replay storage
+  // exists and has passed the checks that are portable across platforms.
+  throw new Error('R8 bridge preflight refused: ' + receiptReadiness.error);
+}
 
 const HOST = process.env.WEB_SWARM_BIND || '127.0.0.1';
 const PORT = Number.parseInt(process.env.WEB_SWARM_PORT || '8788', 10);
