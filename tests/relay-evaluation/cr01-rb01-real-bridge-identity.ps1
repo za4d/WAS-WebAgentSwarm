@@ -14,6 +14,8 @@ $trustedCred=$null
 $workerCred=$null
 $nodePid=0
 $trustedLauncher=$null
+$taskName='was_rb01_'+$id
+$taskRegistered=$false
 $trustedCreated=$false
 $workerCreated=$false
 $report=[ordered]@{
@@ -41,6 +43,8 @@ $report=[ordered]@{
   process_dacl_applied_before_key_load=$false
   process_created_suspended=$false
   process_created_with_explicit_security_descriptor=$false
+  system_privileged_launch_task_used=$false
+  system_launcher_identity_verified=$false
   pre_resume_worker_vm_read_denied=$false
   pre_resume_worker_identity_nonadmin=$false
   pre_resume_probe_executed=$false
@@ -96,28 +100,49 @@ try {
   Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'cr01-rb01-live-bridge-worker-probe.ps1') -Destination (Join-Path $worker 'probe.ps1')
   Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'cr01-rb01-pre-resume-probe.ps1') -Destination (Join-Path $worker 'pre-resume-probe.ps1')
 
-  # This test uses the actual CreateProcessAsUserW *process-creation*
-  # SECURITY_ATTRIBUTES and CREATE_SUSPENDED. Do not spawn a process that
-  # reads its synthetic key before access rights have been checked.
-  Add-Type -Path (Join-Path $PSScriptRoot 'cr01-rb01-createprotected-ci.cs') -ErrorAction Stop
-  $launchEnv=@(
-    ('SystemRoot='+$env:SystemRoot),('WINDIR='+$env:WINDIR),
-    ('Path='+$env:Path),('TEMP='+$trusted),('TMP='+$trusted),
-    'WEB_SWARM_BIND=127.0.0.1',('WEB_SWARM_PORT='+$port),
-    'WEB_SWARM_SEND_MODE=relay_required',
-    ('WEB_SWARM_RELAY_PERMIT_KEY='+[string]$configuration.signer),
-    ('WEB_SWARM_BRIDGE_TOKEN='+[string]$configuration.bridge_token),
-    ('WEB_SWARM_RELAY_RECEIPTS_DIR='+(Join-Path $trusted 'receipts')),
-    ('WEB_SWARM_BRIDGE_TOKEN_FILE='+(Join-Path $trusted 'bridge-token-file'))
-  )
-  $nodePid=[RB01CreateProtected]::LaunchSuspended(
-    $trustedName,$trustedCred.GetNetworkCredential().Password,
-    $exe,(Join-Path $trusted 'bridge\server.js'),
-    (Join-Path $trusted 'bridge'),$trustedSid,[string[]]$launchEnv)
-  if($nodePid -le 0){throw 'creation_time_process_dacl_not_installed'}
+  # A normal elevated GitHub runner lacks SeAssignPrimaryToken/
+  # SeIncreaseQuota (CreateProcessAsUserW returns ERROR_PRIVILEGE_NOT_HELD
+  # 1314). A disposable scheduled task running as LocalSystem provides the
+  # proper Windows service-like privilege context. Node itself is launched
+  # under the *separate standard* trusted account, never SYSTEM.
+  # All account credentials in this file are random synthetic CI values.
+  $systemInput=[ordered]@{
+    username=$trustedName
+    temporary_password=$trustedCred.GetNetworkCredential().Password
+    node_executable=$exe
+    port=$port
+    signer=[string]$configuration.signer
+    bridge_token=[string]$configuration.bridge_token
+    trusted_sid=$trustedSid
+  }
+  $systemInput|ConvertTo-Json -Depth 4|Set-Content -LiteralPath (Join-Path $trusted 'system-test-identity.json') -Encoding UTF8
+  $systemScript=Join-Path $PSScriptRoot 'cr01-rb01-system-task-launch-ci.ps1'
+  $taskArgs='-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "'+$systemScript+'" -TrustedDir "'+$trusted+'"'
+  $action=New-ScheduledTaskAction -Execute "$env:WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe" -Argument $taskArgs
+  $principal=New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+  $settings=New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 3)
+  Register-ScheduledTask -TaskName $taskName -Action $action -Principal $principal -Settings $settings -Force -ErrorAction Stop|Out-Null
+  $taskRegistered=$true
+  Start-ScheduledTask -TaskName $taskName -ErrorAction Stop
+  $systemState=Join-Path $trusted 'system-launch-status.json'
+  $systemStateReady=$false
+  for($n=0;$n -lt 150;$n++){
+    if(Test-Path -LiteralPath $systemState){$systemStateReady=$true;break}
+    Start-Sleep -Milliseconds 300
+  }
+  if(-not $systemStateReady){throw 'system_task_missing_creation_time_result'}
+  $stage=Get-Content -LiteralPath $systemState -Raw|ConvertFrom-Json
+  if($stage.stage -ne 'SUSPENDED_PROTECTED_AT_CREATION'){
+    throw ('system_task_creation_failed_'+[string]$stage.error)
+  }
+  $nodePid=[int]$stage.target_pid
+  if($nodePid -le 0){throw 'creation_time_process_pid_missing'}
+  $report.system_privileged_launch_task_used=$true
+  $report.system_launcher_identity_verified=([string]$stage.launcher_identity -ieq 'NT AUTHORITY\SYSTEM')
   $report.process_created_suspended=$true
-  $report.process_created_with_explicit_security_descriptor=$true
-  $report.process_dacl_applied_before_key_load=$true
+  $report.process_created_with_explicit_security_descriptor=[bool]$stage.process_dacl_at_creation
+  $report.process_dacl_applied_before_key_load=[bool]$stage.thread_dacl_at_creation
+  if(-not $report.system_launcher_identity_verified){throw 'system_launcher_identity_not_verified'}
 
   # Negative probe runs in a separately authenticated STANDARD Windows
   # worker while Node has not executed its first instruction.
@@ -132,7 +157,16 @@ try {
   $report.pre_resume_worker_identity_nonadmin=[bool]$preObserved.worker_nonadmin
   $report.pre_resume_worker_vm_read_denied=([bool]$preObserved.process_vm_read_denied -and $pre.ExitCode -eq 0)
   if(-not $report.pre_resume_worker_vm_read_denied){throw 'creation_time_process_access_denied_fail'}
-  [RB01CreateProtected]::Resume($nodePid)
+  # Only the privileged creator holds the process's suspended thread handle.
+  # Allow it to resume after the independent worker probe was denied.
+  Set-Content -LiteralPath (Join-Path $trusted 'resume-after-worker-check') -Value 'PROBE_DENIED'
+  $resumeStatus=Join-Path $trusted 'system-resumed'
+  $didResume=$false
+  for($n=0;$n -lt 80;$n++){
+    if(Test-Path -LiteralPath $resumeStatus){$didResume=$true;break}
+    Start-Sleep -Milliseconds 250
+  }
+  if(-not $didResume){throw 'system_launcher_did_not_resume_protected_process'}
 
   $url='http://127.0.0.1:'+ $port
   for($n=0;$n -lt 70;$n++) {
@@ -191,6 +225,8 @@ try {
     $report.process_created_suspended,
     $report.process_created_with_explicit_security_descriptor,
     $report.process_dacl_applied_before_key_load,
+    $report.system_privileged_launch_task_used,
+    $report.system_launcher_identity_verified,
     $report.pre_resume_probe_executed,
     $report.pre_resume_worker_identity_nonadmin,
     $report.pre_resume_worker_vm_read_denied
@@ -205,10 +241,11 @@ try {
   $report.error_class=$_.Exception.GetType().Name
   $report.error_stage=$_.Exception.Message
 } finally {
-  if($nodePid -gt 0) {
-    try {[RB01CreateProtected]::StopSuspended($nodePid)} catch {}
-    try {Stop-Process -Id $nodePid -Force -ErrorAction Stop} catch {}
+  if($taskRegistered){
+    try {Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue} catch {}
+    try {Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction Stop} catch {$report.cleanup_task_failed=$true}
   }
+  if($nodePid -gt 0) {try {Stop-Process -Id $nodePid -Force -ErrorAction Stop} catch {}}
   if($trustedLauncher) {try {Stop-Process -Id $trustedLauncher.Id -Force -ErrorAction Stop} catch {}}
   if($trustedCreated) {try {Remove-LocalUser -Name $trustedName -ErrorAction Stop} catch {$report.cleanup_trusted_user_failed=$true}}
   if($workerCreated) {try {Remove-LocalUser -Name $workerName -ErrorAction Stop} catch {$report.cleanup_worker_user_failed=$true}}
