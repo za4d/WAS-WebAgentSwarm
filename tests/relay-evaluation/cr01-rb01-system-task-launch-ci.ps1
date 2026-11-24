@@ -25,7 +25,7 @@ try {
     ('WEB_SWARM_BRIDGE_TOKEN_FILE='+(Join-Path $TrustedDir 'bridge-token-file'))
   )
   $pidForCleanup=[RB01CreateProtected]::LaunchSuspended(
-    [string]$private.username,[string]$private.temporary_password,
+    [string]$private.username,[string]$private.temporary_account_credential,
     [string]$private.node_executable,(Join-Path $TrustedDir 'bridge\server.js'),
     (Join-Path $TrustedDir 'bridge'),[string]$private.trusted_sid,$envBlock)
   $created=$true
