@@ -108,7 +108,7 @@ try {
   # All account credentials in this file are random synthetic CI values.
   $systemInput=[ordered]@{
     username=$trustedName
-    temporary_password=$trustedCred.GetNetworkCredential().Password
+    temporary_account_credential=$trustedCred.GetNetworkCredential().Password
     node_executable=$exe
     port=$port
     signer=[string]$configuration.signer
