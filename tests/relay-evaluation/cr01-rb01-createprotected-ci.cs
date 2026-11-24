@@ -137,9 +137,11 @@ public static class RB01CreateProtected {
             bool launched=CreateProcessAsUser(
                 token,application,cmd,ref procAttrs,ref threadAttrs,
                 false,flags,environment,workdir,ref startup,out proc);
-            if (!launched)
-                throw new Win32Exception(Marshal.GetLastWin32Error(),
-                    "CreateProcessAsUserW with creation-time DACL failed");
+            if (!launched) {
+                int code=Marshal.GetLastWin32Error();
+                throw new Win32Exception(code,
+                    "CreateProcessAsUserW with creation-time DACL failed; win32_error="+code);
+            }
             if (proc.hProcess==IntPtr.Zero || proc.hThread==IntPtr.Zero)
                 throw new InvalidOperationException("Missing process or thread handle");
             suspended[proc.dwProcessId]=new Spawned{
