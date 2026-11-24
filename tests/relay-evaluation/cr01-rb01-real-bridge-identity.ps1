@@ -14,11 +14,13 @@ $trustedCred=$null
 $workerCred=$null
 $nodePid=0
 $trustedLauncher=$null
+$taskName='was_rb01_'+$id
+$taskRegistered=$false
 $trustedCreated=$false
 $workerCreated=$false
 $report=[ordered]@{
-  case='RB01-REAL-BRIDGE-SEPARATE-PRINCIPALS-01'
-  provenance='Windows CI actual Node strict bridge under separate standard service-like identity; fake credentials'
+  case='RB01-CREATION-TIME-DACL-STRICT-BRIDGE-01'
+  provenance='Windows CI creation-time process+thread DACL, suspended Node before secrets, two separate standard identities; fake credentials'
   owner_windows_host_tested=$false
   real_authenticated_browser_used=$false
   actual_windows_service_installed=$false
@@ -39,6 +41,13 @@ $report=[ordered]@{
   worker_process_probe_error=$null
   process_dacl_applied_after_launch=$false
   process_dacl_applied_before_key_load=$false
+  process_created_suspended=$false
+  process_created_with_explicit_security_descriptor=$false
+  system_privileged_launch_task_used=$false
+  system_launcher_identity_verified=$false
+  pre_resume_worker_vm_read_denied=$false
+  pre_resume_worker_identity_nonadmin=$false
+  pre_resume_probe_executed=$false
   service_survived_worker_probe=$false
   verdict='INCONCLUSIVE'
   error_class=$null
@@ -88,12 +97,76 @@ try {
   }
   $configText=ConvertTo-Json -InputObject $configuration -Depth 4
   Set-Content -LiteralPath (Join-Path $trusted 'synthetic-config.json') -Value $configText -Encoding UTF8
-  Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'cr01-rb01-trusted-bridge-launch.ps1') -Destination (Join-Path $trusted 'launch.ps1')
   Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'cr01-rb01-live-bridge-worker-probe.ps1') -Destination (Join-Path $worker 'probe.ps1')
+  Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'cr01-rb01-pre-resume-probe.ps1') -Destination (Join-Path $worker 'pre-resume-probe.ps1')
 
-  $launchArgs=@('-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',
-    ('"'+(Join-Path $trusted 'launch.ps1')+'"'),'-TrustedDir',('"'+$trusted+'"'))
-  $trustedLauncher=Start-Process -FilePath "$env:WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe" -Credential $trustedCred -ArgumentList $launchArgs -WorkingDirectory $trusted -RedirectStandardOutput (Join-Path $trusted 'stdout.log') -RedirectStandardError (Join-Path $trusted 'stderr.log') -PassThru -ErrorAction Stop
+  # A normal elevated GitHub runner lacks SeAssignPrimaryToken/
+  # SeIncreaseQuota (CreateProcessAsUserW returns ERROR_PRIVILEGE_NOT_HELD
+  # 1314). A disposable scheduled task running as LocalSystem provides the
+  # proper Windows service-like privilege context. Node itself is launched
+  # under the *separate standard* trusted account, never SYSTEM.
+  # All account credentials in this file are random synthetic CI values.
+  $systemInput=[ordered]@{
+    username=$trustedName
+    temporary_account_credential=$trustedCred.GetNetworkCredential().Password
+    node_executable=$exe
+    port=$port
+    signer=[string]$configuration.signer
+    bridge_token=[string]$configuration.bridge_token
+    trusted_sid=$trustedSid
+  }
+  $systemInput|ConvertTo-Json -Depth 4|Set-Content -LiteralPath (Join-Path $trusted 'system-test-identity.json') -Encoding UTF8
+  $systemScript=Join-Path $PSScriptRoot 'cr01-rb01-system-task-launch-ci.ps1'
+  $taskArgs='-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "'+$systemScript+'" -TrustedDir "'+$trusted+'"'
+  $action=New-ScheduledTaskAction -Execute "$env:WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe" -Argument $taskArgs
+  $principal=New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+  $settings=New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 3)
+  Register-ScheduledTask -TaskName $taskName -Action $action -Principal $principal -Settings $settings -Force -ErrorAction Stop|Out-Null
+  $taskRegistered=$true
+  Start-ScheduledTask -TaskName $taskName -ErrorAction Stop
+  $systemState=Join-Path $trusted 'system-launch-status.json'
+  $systemStateReady=$false
+  for($n=0;$n -lt 150;$n++){
+    if(Test-Path -LiteralPath $systemState){$systemStateReady=$true;break}
+    Start-Sleep -Milliseconds 300
+  }
+  if(-not $systemStateReady){throw 'system_task_missing_creation_time_result'}
+  $stage=Get-Content -LiteralPath $systemState -Raw|ConvertFrom-Json
+  if($stage.stage -ne 'SUSPENDED_PROTECTED_AT_CREATION'){
+    throw ('system_task_creation_failed_'+[string]$stage.error)
+  }
+  $nodePid=[int]$stage.target_pid
+  if($nodePid -le 0){throw 'creation_time_process_pid_missing'}
+  $report.system_privileged_launch_task_used=$true
+  $report.system_launcher_identity_verified=([string]$stage.launcher_identity -ieq 'NT AUTHORITY\SYSTEM')
+  $report.process_created_suspended=$true
+  $report.process_created_with_explicit_security_descriptor=[bool]$stage.process_dacl_at_creation
+  $report.process_dacl_applied_before_key_load=[bool]$stage.thread_dacl_at_creation
+  if(-not $report.system_launcher_identity_verified){throw 'system_launcher_identity_not_verified'}
+
+  # Negative probe runs in a separately authenticated STANDARD Windows
+  # worker while Node has not executed its first instruction.
+  $preResult=Join-Path $worker 'pre-resume-result.json'
+  $preArgs=@('-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',
+    ('"'+(Join-Path $worker 'pre-resume-probe.ps1')+'"'),
+    '-TargetPid',"$nodePid",'-ResultPath',('"'+$preResult+'"'))
+  $pre=Start-Process -FilePath "$env:WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe" -Credential $workerCred -ArgumentList $preArgs -WorkingDirectory $worker -RedirectStandardOutput (Join-Path $worker 'pre-resume-out.log') -RedirectStandardError (Join-Path $worker 'pre-resume-err.log') -Wait -PassThru -ErrorAction Stop
+  if(-not (Test-Path -LiteralPath $preResult)){throw 'creation_time_probe_missing'}
+  $preObserved=Get-Content -LiteralPath $preResult -Raw|ConvertFrom-Json
+  $report.pre_resume_probe_executed=$true
+  $report.pre_resume_worker_identity_nonadmin=[bool]$preObserved.worker_nonadmin
+  $report.pre_resume_worker_vm_read_denied=([bool]$preObserved.process_vm_read_denied -and $pre.ExitCode -eq 0)
+  if(-not $report.pre_resume_worker_vm_read_denied){throw 'creation_time_process_access_denied_fail'}
+  # Only the privileged creator holds the process's suspended thread handle.
+  # Allow it to resume after the independent worker probe was denied.
+  Set-Content -LiteralPath (Join-Path $trusted 'resume-after-worker-check') -Value 'PROBE_DENIED'
+  $resumeStatus=Join-Path $trusted 'system-resumed'
+  $didResume=$false
+  for($n=0;$n -lt 80;$n++){
+    if(Test-Path -LiteralPath $resumeStatus){$didResume=$true;break}
+    Start-Sleep -Milliseconds 250
+  }
+  if(-not $didResume){throw 'system_launcher_did_not_resume_protected_process'}
 
   $url='http://127.0.0.1:'+ $port
   for($n=0;$n -lt 70;$n++) {
@@ -108,21 +181,15 @@ try {
   }
   if(-not $report.trusted_bridge_health_authorized){throw 'trusted_bridge_not_ready'}
 
-  $nodes=Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object { $_.CommandLine -like ('*'+$trusted+'\bridge\server.js*') }
-  if(@($nodes).Count -ne 1){throw 'trusted_node_process_ambiguous'}
-  $nodePid=[int](@($nodes)[0].ProcessId)
+  $nodes=Get-CimInstance Win32_Process -Filter ("ProcessId="+$nodePid)
+  if(@($nodes).Count -ne 1){throw 'trusted_node_process_missing'}
   $owner=Invoke-CimMethod -InputObject (@($nodes)[0]) -MethodName GetOwner -ErrorAction Stop
   $report.trusted_identity_nonadmin=($owner.User -ieq $trustedName)
   $report.actual_bridge_process_running=($nodePid -gt 0 -and $report.trusted_identity_nonadmin)
   if(-not $report.actual_bridge_process_running){throw 'wrong_service_process_owner'}
 
-  # Controlled comparison against earlier *unmodified* process DACL failure
-  # at run #45277583179. This modifies only the ephemeral CI process,
-  # AFTER its startup. It is NOT an acceptable production launch sequence.
-  & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'cr01-rb01-process-dacl-ci.ps1') -TargetPid $nodePid -TrustedSid $trustedSid | Out-Null
-  if($LASTEXITCODE -ne 0){throw 'explicit_process_dacl_failed'}
-  $report.process_dacl_applied_after_launch=$true
-
+  # No post-startup DACL patch is used here. The same full worker test
+  # probes the already-protected real Node process after it loads secrets.
   $workerResult=Join-Path $worker 'worker-result.json'
   $args=@('-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',
     ('"'+(Join-Path $worker 'probe.ps1')+'"'),'-TrustedDir',('"'+$trusted+'"'),
@@ -154,18 +221,30 @@ try {
     $report.worker_receipt_read_denied, $report.worker_bridge_source_write_denied,
     $report.worker_browser_profile_canary_list_denied,
     $report.worker_bridge_http_unauthorized, $report.worker_unsigned_send_unauthorized,
-    $report.worker_process_memory_read_denied, $report.service_survived_worker_probe
+    $report.worker_process_memory_read_denied, $report.service_survived_worker_probe,
+    $report.process_created_suspended,
+    $report.process_created_with_explicit_security_descriptor,
+    $report.process_dacl_applied_before_key_load,
+    $report.system_privileged_launch_task_used,
+    $report.system_launcher_identity_verified,
+    $report.pre_resume_probe_executed,
+    $report.pre_resume_worker_identity_nonadmin,
+    $report.pre_resume_worker_vm_read_denied
   )
   if(($checks | Where-Object { -not $_ }).Count -eq 0) {
-    $report.verdict='PASS_BRIDGE_PROCESS_BOUNDARY_ONLY'
+    $report.verdict='PASS_CREATION_TIME_PROCESS_BOUNDARY_ONLY'
   } else {
-    $report.verdict='FAIL_BRIDGE_PROCESS_BOUNDARY'
+    $report.verdict='FAIL_CREATION_TIME_PROCESS_BOUNDARY'
   }
 } catch {
   $report.verdict='INCONCLUSIVE_OR_FAIL'
   $report.error_class=$_.Exception.GetType().Name
   $report.error_stage=$_.Exception.Message
 } finally {
+  if($taskRegistered){
+    try {Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue} catch {}
+    try {Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction Stop} catch {$report.cleanup_task_failed=$true}
+  }
   if($nodePid -gt 0) {try {Stop-Process -Id $nodePid -Force -ErrorAction Stop} catch {}}
   if($trustedLauncher) {try {Stop-Process -Id $trustedLauncher.Id -Force -ErrorAction Stop} catch {}}
   if($trustedCreated) {try {Remove-LocalUser -Name $trustedName -ErrorAction Stop} catch {$report.cleanup_trusted_user_failed=$true}}
@@ -175,5 +254,5 @@ try {
   $report|ConvertTo-Json -Depth 7|Set-Content -LiteralPath $EvidencePath -Encoding UTF8
   Write-Output ($report|ConvertTo-Json -Depth 7)
 }
-if($report.verdict -eq 'PASS_BRIDGE_PROCESS_BOUNDARY_ONLY'){exit 0}
+if($report.verdict -eq 'PASS_CREATION_TIME_PROCESS_BOUNDARY_ONLY'){exit 0}
 exit 1
