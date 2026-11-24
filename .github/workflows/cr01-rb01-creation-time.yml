@@ -1,0 +1,51 @@
+name: CR-01 RB-01 creation-time Windows process protection
+
+on:
+  push:
+    branches:
+      - test/cr01-rb01-creation-time-20261124
+    paths:
+      - 'tests/relay-evaluation/cr01-rb01-createprotected-ci.cs'
+      - 'tests/relay-evaluation/cr01-rb01-pre-resume-probe.ps1'
+      - 'tests/relay-evaluation/cr01-rb01-real-bridge-identity.ps1'
+      - '.github/workflows/cr01-rb01-creation-time.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  creation-time-dacl:
+    name: Node bridge suspended with creation-time DACL + unprivileged probes
+    runs-on: windows-latest
+    timeout-minutes: 9
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install bridge dependencies without lifecycle scripts
+        run: npm ci --prefix bridge --ignore-scripts
+      - name: Test pre-execution and post-execution VM_READ restriction
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $result=Join-Path $env:RUNNER_TEMP 'rb01-creation-time.json'
+          & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File 'tests/relay-evaluation/cr01-rb01-real-bridge-identity.ps1' -EvidencePath $result
+          $code=$LASTEXITCODE
+          if(Test-Path -LiteralPath $result){Get-Content -LiteralPath $result}
+          ('source_sha='+$env:GITHUB_SHA) | Set-Content -LiteralPath (Join-Path $env:RUNNER_TEMP 'rb01-creation-time-receipt.txt')
+          ('runner_exit='+$code) | Add-Content -LiteralPath (Join-Path $env:RUNNER_TEMP 'rb01-creation-time-receipt.txt')
+          exit $code
+      - name: Save complete test receipts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rb01-creation-time-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/rb01-creation-time.json
+            ${{ runner.temp }}/rb01-creation-time-receipt.txt
+          retention-days: 30
+          if-no-files-found: warn
