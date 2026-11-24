@@ -19,7 +19,7 @@ $taskRegistered=$false
 $trustedCreated=$false
 $workerCreated=$false
 $report=[ordered]@{
-  case='RB01-CREATION-TIME-DACL-STRICT-BRIDGE-01'
+  case='RB01-DEPLOYMENT-RIGHTS-STRICT-BRIDGE-01'
   provenance='Windows CI creation-time process+thread DACL, suspended Node before secrets, two separate standard identities; fake credentials'
   owner_windows_host_tested=$false
   real_authenticated_browser_used=$false
@@ -48,6 +48,8 @@ $report=[ordered]@{
   pre_resume_worker_vm_read_denied=$false
   pre_resume_worker_identity_nonadmin=$false
   pre_resume_probe_executed=$false
+  pre_resume_rights=$null
+  post_resume_rights=$null
   service_survived_worker_probe=$false
   verdict='INCONCLUSIVE'
   error_class=$null
@@ -74,6 +76,8 @@ try {
   $workerCreated=$true
   $trustedSid=(Get-LocalUser -Name $trustedName).SID.Value
   $workerSid=(Get-LocalUser -Name $workerName).SID.Value
+  & icacls.exe $root '/inheritance:r' '/grant:r' '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' | Out-Null
+  if($LASTEXITCODE -ne 0){throw 'root_acl'}
   foreach($sid in @($trustedSid,$workerSid)) {
     & icacls.exe $root '/grant' ('*'+$sid+':(RX)') | Out-Null
     if($LASTEXITCODE -ne 0){throw 'root_traversal_acl'}
@@ -116,7 +120,30 @@ try {
     trusted_sid=$trustedSid
   }
   $systemInput|ConvertTo-Json -Depth 4|Set-Content -LiteralPath (Join-Path $trusted 'system-test-identity.json') -Encoding UTF8
-  $systemScript=Join-Path $PSScriptRoot 'cr01-rb01-system-task-launch-ci.ps1'
+  # Protect the privileged task action and its compiler input.
+  $launcher=Join-Path $root 'launcher'
+  New-Item -ItemType Directory -Path $launcher -Force|Out-Null
+  & icacls.exe $launcher '/inheritance:r' '/grant:r' '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' | Out-Null
+  if($LASTEXITCODE -ne 0){throw 'launcher_acl'}
+  Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'cr01-rb01-system-task-launch-ci.ps1') -Destination $launcher
+  Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'cr01-rb01-createprotected-ci.cs') -Destination $launcher
+  $systemScript=Join-Path $launcher 'cr01-rb01-system-task-launch-ci.ps1'
+  $probePath=Join-Path $worker 'rights-probe.ps1'
+  Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'cr01-rb01-deployment-rights-probe.ps1') -Destination $probePath
+  function Invoke-RightsProbe([string]$phase) {
+    $proc=Get-Process -Id $nodePid -ErrorAction Stop
+    $threads=@($proc.Threads|ForEach-Object{$_.Id})
+    if($threads.Count -eq 0){throw 'no_target_threads'}
+    $out=Join-Path $worker ($phase+'-rights.json')
+    $args=@('-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',
+      ('"'+$probePath+'"'),'-TargetPid',"$nodePid",'-ThreadIds',($threads -join ','),
+      '-ExpectedSid',$workerSid,'-ResultPath',('"'+$out+'"'),'-LauncherCanary',('"'+$systemScript+'"'))
+    $p=Start-Process -FilePath "$env:WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe" -Credential $workerCred -ArgumentList $args -WorkingDirectory $worker -Wait -PassThru -ErrorAction Stop
+    if(-not (Test-Path -LiteralPath $out)){throw 'rights_probe_missing'}
+    $res=Get-Content -LiteralPath $out -Raw|ConvertFrom-Json
+    $res|Add-Member -NotePropertyName exit_code -NotePropertyValue $p.ExitCode
+    return $res
+  }
   $taskArgs='-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "'+$systemScript+'" -TrustedDir "'+$trusted+'"'
   $action=New-ScheduledTaskAction -Execute "$env:WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe" -Argument $taskArgs
   $principal=New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
@@ -157,6 +184,8 @@ try {
   $report.pre_resume_worker_identity_nonadmin=[bool]$preObserved.worker_nonadmin
   $report.pre_resume_worker_vm_read_denied=([bool]$preObserved.process_vm_read_denied -and $pre.ExitCode -eq 0)
   if(-not $report.pre_resume_worker_vm_read_denied){throw 'creation_time_process_access_denied_fail'}
+  $report.pre_resume_rights=Invoke-RightsProbe 'pre'
+  if(-not $report.pre_resume_rights.pass -or $report.pre_resume_rights.exit_code -ne 0){throw 'pre_resume_rights_not_denied'}
   # Only the privileged creator holds the process's suspended thread handle.
   # Allow it to resume after the independent worker probe was denied.
   Set-Content -LiteralPath (Join-Path $trusted 'resume-after-worker-check') -Value 'PROBE_DENIED'
@@ -212,6 +241,7 @@ try {
   $report.worker_process_probe_error=$p.process_probe_error
   $report.worker_process_memory_read_denied=($p.process_vm_read_probe_executed -and $p.process_vm_read_opened -eq $false)
 
+  $report.post_resume_rights=Invoke-RightsProbe 'post'
   $after=Invoke-WebRequest -Uri ($url+'/health') -UseBasicParsing -Headers @{'x-was-token'=$configuration.bridge_token} -TimeoutSec 5 -ErrorAction Stop
   $report.service_survived_worker_probe=($after.StatusCode -eq 200)
   $checks=@(
@@ -229,12 +259,14 @@ try {
     $report.system_launcher_identity_verified,
     $report.pre_resume_probe_executed,
     $report.pre_resume_worker_identity_nonadmin,
-    $report.pre_resume_worker_vm_read_denied
+    $report.pre_resume_worker_vm_read_denied,
+    ($report.pre_resume_rights.pass -and $report.pre_resume_rights.exit_code -eq 0),
+    ($report.post_resume_rights.pass -and $report.post_resume_rights.exit_code -eq 0)
   )
   if(($checks | Where-Object { -not $_ }).Count -eq 0) {
-    $report.verdict='PASS_CREATION_TIME_PROCESS_BOUNDARY_ONLY'
+    $report.verdict='PASS_DEPLOYMENT_RIGHTS_ONLY'
   } else {
-    $report.verdict='FAIL_CREATION_TIME_PROCESS_BOUNDARY'
+    $report.verdict='FAIL_DEPLOYMENT_RIGHTS'
   }
 } catch {
   $report.verdict='INCONCLUSIVE_OR_FAIL'
@@ -254,5 +286,5 @@ try {
   $report|ConvertTo-Json -Depth 7|Set-Content -LiteralPath $EvidencePath -Encoding UTF8
   Write-Output ($report|ConvertTo-Json -Depth 7)
 }
-if($report.verdict -eq 'PASS_CREATION_TIME_PROCESS_BOUNDARY_ONLY'){exit 0}
+if($report.verdict -eq 'PASS_DEPLOYMENT_RIGHTS_ONLY'){exit 0}
 exit 1
